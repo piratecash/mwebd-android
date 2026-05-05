@@ -15,7 +15,7 @@ if [[ ! -x "${CMDLINE_TOOLS_DIR}/bin/sdkmanager" ]]; then
   mv "${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools" "${CMDLINE_TOOLS_DIR}"
 fi
 
-yes | "${CMDLINE_TOOLS_DIR}/bin/sdkmanager" --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null
+yes | "${CMDLINE_TOOLS_DIR}/bin/sdkmanager" --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || true
 "${CMDLINE_TOOLS_DIR}/bin/sdkmanager" --sdk_root="${ANDROID_SDK_ROOT}" \
   "platform-tools" \
   "platforms;android-24" \
