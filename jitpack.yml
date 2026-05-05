@@ -1,0 +1,8 @@
+jdk:
+  - openjdk17
+
+before_install:
+  - bash scripts/install-go.sh
+
+install:
+  - export PATH="$HOME/.go/bin:$HOME/go/bin:$PATH" && ./gradlew publishToMavenLocal -x test

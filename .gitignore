@@ -1,0 +1,10 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.DS_Store
+
+# Go
+go/**/vendor/
+go/**/bin/
