@@ -3,7 +3,7 @@ jdk:
 
 before_install:
   - bash scripts/install-go.sh
-  - bash scripts/install-android-sdk.sh
+  - ANDROID_HOME="$HOME/android-sdk" ANDROID_SDK_ROOT="$HOME/android-sdk" bash scripts/install-android-sdk.sh
 
 install:
   - export ANDROID_HOME="$HOME/android-sdk" ANDROID_SDK_ROOT="$HOME/android-sdk" ANDROID_NDK_HOME="$HOME/android-sdk/ndk/27.0.12077973" PATH="$HOME/.go/bin:$HOME/go/bin:$PATH" && ./gradlew publishToMavenLocal
