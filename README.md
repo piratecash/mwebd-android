@@ -17,7 +17,7 @@ dependencies {
 ## What This Contains
 
 - A small Go wrapper around `github.com/ltcmweb/mwebd`.
-- A pinned upstream dependency: `github.com/ltcmweb/mwebd v0.1.17`.
+- A pinned upstream dependency: `github.com/ltcmweb/mwebd v0.1.19`.
 - A Gradle `maven-publish` setup for JitPack.
 - A `gomobile bind` build that produces an Android AAR with native libraries for:
   - `armeabi-v7a`
