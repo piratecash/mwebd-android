@@ -13,6 +13,7 @@ version = providers.environmentVariable("JITPACK_VERSION")
 val mwebdAar = layout.buildDirectory.file("outputs/aar/mwebd-android.aar")
 val goPackageDir = layout.projectDirectory.dir("go/mwebdandroid")
 val xMobileVersion = "v0.0.0-20250210185054-b38b8813d607"
+val android16KbLdFlags = "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
 
 tasks.register<Exec>("installGomobileTools") {
     workingDir = goPackageDir.asFile
@@ -46,6 +47,8 @@ val buildMwebdAar by tasks.registering(Exec::class) {
 
     workingDir = goPackageDir.asFile
     inputs.files(fileTree(goPackageDir))
+    inputs.property("android16KbLdFlags", android16KbLdFlags)
+    inputs.property("xMobileVersion", xMobileVersion)
     outputs.file(mwebdAar)
 
     doFirst {
@@ -62,14 +65,81 @@ val buildMwebdAar by tasks.registering(Exec::class) {
               -target=android/arm,android/arm64,android/amd64 \
               -androidapi=24 \
               -javapkg=com.piratecash \
+              -ldflags='${android16KbLdFlags}' \
               -o "${mwebdAar.get().asFile.absolutePath}" \
               .
         """.trimIndent()
     )
 }
 
-tasks.assemble {
+val verifyElfAlignment by tasks.registering(Exec::class) {
     dependsOn(buildMwebdAar)
+
+    inputs.file(mwebdAar)
+    val verifyDir = layout.buildDirectory.dir("tmp/verifyElfAlignment")
+    outputs.dir(verifyDir)
+
+    commandLine(
+        "bash",
+        "-lc",
+        """
+            set -euo pipefail
+
+            work="${verifyDir.get().asFile.absolutePath}"
+            rm -rf "${'$'}work"
+            mkdir -p "${'$'}work"
+            cd "${'$'}work"
+            jar xf "${mwebdAar.get().asFile.absolutePath}"
+
+            readelf=""
+            for candidate in \
+              "${'$'}{ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt"/*/bin/llvm-readelf \
+              "${'$'}{ANDROID_SDK_ROOT:-${'$'}{ANDROID_HOME:-}}"/ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-readelf \
+              "${'$'}{ANDROID_HOME:-}"/ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-readelf
+            do
+              if [[ -x "${'$'}candidate" ]]; then
+                readelf="${'$'}candidate"
+                break
+              fi
+            done
+
+            if [[ -z "${'$'}readelf" ]]; then
+              echo "llvm-readelf not found; set ANDROID_NDK_HOME or ANDROID_SDK_ROOT"
+              exit 1
+            fi
+
+            failed=0
+            found=0
+            while IFS= read -r so; do
+              found=1
+              while IFS= read -r align; do
+                if (( align < 0x4000 )); then
+                  echo "ELF LOAD alignment ${'$'}align is below 16 KB: ${'$'}so"
+                  failed=1
+                fi
+              done < <("${'$'}readelf" -lW "${'$'}so" | awk '/LOAD/ { print ${'$'}NF }')
+            done < <(find jni -name "*.so" | sort)
+
+            if (( found == 0 )); then
+              echo "No native libraries found in AAR"
+              failed=1
+            fi
+
+            exit "${'$'}failed"
+        """.trimIndent()
+    )
+}
+
+tasks.assemble {
+    dependsOn(verifyElfAlignment)
+}
+
+tasks.check {
+    dependsOn(verifyElfAlignment)
+}
+
+tasks.named("publishToMavenLocal") {
+    dependsOn(verifyElfAlignment)
 }
 
 publishing {

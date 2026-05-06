@@ -23,6 +23,7 @@ dependencies {
   - `armeabi-v7a`
   - `arm64-v8a`
   - `x86_64`
+- A 16 KB ELF alignment check for generated native libraries.
 
 Consumers of the published AAR do not need Go, gomobile, or Android NDK in their
 own build environment.
@@ -47,6 +48,13 @@ Build only the AAR:
 ./gradlew buildMwebdAar
 ```
 
+Verify generated native libraries are compatible with Android 16 KB page-size
+devices:
+
+```bash
+./gradlew verifyElfAlignment
+```
+
 ## Kotlin Usage Sketch
 
 `gomobile bind` generates Java/Kotlin-callable bindings under the
@@ -56,7 +64,7 @@ Build only the AAR:
 val daemon = Mwebdandroid.newDaemon(
     "mainnet",
     filesDir.resolve("mwebd").absolutePath,
-    "litecoin.stackwallet.com:9333",
+    "",
     ""
 )
 
