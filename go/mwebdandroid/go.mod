@@ -7,6 +7,8 @@ require (
 	google.golang.org/grpc v1.75.0
 )
 
+replace github.com/ltcmweb/neutrino => ./third_party/neutrino
+
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/StackExchange/wmi v1.2.1 // indirect
