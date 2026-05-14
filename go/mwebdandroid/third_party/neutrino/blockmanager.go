@@ -146,7 +146,7 @@ type blockManager struct { // nolint:maligned
 	// headers that we've verified in the past 10 seconds.
 	fltrHeaderProgessLogger *headerProgressLogger
 
-	// genesisHeader is the filter header of the genesis block.
+	// genesisHeader is the first filter header known to the local store.
 	genesisHeader chainhash.Hash
 
 	// headerTip will be set to the current block header tip at all times.
@@ -268,13 +268,14 @@ func newBlockManager(cfg *blockManagerCfg) (*blockManager, error) {
 	bm.newFilterHeadersSignal = sync.NewCond(&bm.newFilterHeadersMtx)
 	bm.mwebRollbackSignal = sync.NewCond(&bm.mwebUtxosCallbacksMtx)
 
-	// We fetch the genesis header to use for verifying the first received
-	// interval.
-	genesisHeader, err := cfg.RegFilterHeaders.FetchHeaderByHeight(0)
+	// We fetch the current base header to use for verifying the first
+	// received interval. For checkpoint-bootstrapped stores this is the
+	// checkpoint filter header, not height zero.
+	baseFilterHeader, _, err := cfg.RegFilterHeaders.ChainTip()
 	if err != nil {
 		return nil, err
 	}
-	bm.genesisHeader = *genesisHeader
+	bm.genesisHeader = *baseFilterHeader
 
 	// Initialize the next checkpoint based on the current height.
 	header, height, err := cfg.BlockHeaders.ChainTip()

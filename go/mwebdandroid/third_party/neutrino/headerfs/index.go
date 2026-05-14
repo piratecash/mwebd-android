@@ -26,6 +26,9 @@ var (
 	// current block hash of the best known chain that the headers for
 	// regular filter are synced to.
 	regFilterTip = []byte("regular")
+
+	bitcoinFirstHeight   = []byte("bitcoin-first-height")
+	regFilterFirstHeight = []byte("regular-first-height")
 )
 
 var (
@@ -156,6 +159,7 @@ func (h *headerIndex) addHeaders(batch headerBatch) error {
 		rootBucket := tx.ReadWriteBucket(indexBucket)
 
 		var tipKey []byte
+		var firstHeightKey []byte
 
 		// Based on the specified index type of this instance of the
 		// index, we'll grab the key that tracks the tip of the chain
@@ -165,8 +169,10 @@ func (h *headerIndex) addHeaders(batch headerBatch) error {
 		switch h.indexType {
 		case Block:
 			tipKey = bitcoinTip
+			firstHeightKey = bitcoinFirstHeight
 		case RegularFilter:
 			tipKey = regFilterTip
+			firstHeightKey = regFilterFirstHeight
 		default:
 			return fmt.Errorf("unknown index type: %v", h.indexType)
 		}
@@ -174,7 +180,14 @@ func (h *headerIndex) addHeaders(batch headerBatch) error {
 		var (
 			chainTipHash   chainhash.Hash
 			chainTipHeight uint32
+			firstHeight    uint32
 		)
+		existingFirstHeight := rootBucket.Get(firstHeightKey)
+		if existingFirstHeight == nil {
+			firstHeight = batch[0].height
+		} else {
+			firstHeight = binary.BigEndian.Uint32(existingFirstHeight)
+		}
 
 		for _, header := range batch {
 			if err := putHeaderEntry(rootBucket, header); err != nil {
@@ -187,10 +200,51 @@ func (h *headerIndex) addHeaders(batch headerBatch) error {
 				chainTipHash = header.hash
 				chainTipHeight = header.height
 			}
+			if header.height < firstHeight {
+				firstHeight = header.height
+			}
+		}
+
+		var firstHeightBytes [4]byte
+		binary.BigEndian.PutUint32(firstHeightBytes[:], firstHeight)
+		if err := rootBucket.Put(firstHeightKey, firstHeightBytes[:]); err != nil {
+			return err
 		}
 
 		return rootBucket.Put(tipKey, chainTipHash[:])
 	})
+}
+
+func (h *headerIndex) firstKnownHeight() (uint32, error) {
+	var height uint32
+	err := walletdb.View(h.db, func(tx walletdb.ReadTx) error {
+		rootBucket := tx.ReadBucket(indexBucket)
+		if rootBucket == nil {
+			return nil
+		}
+
+		var key []byte
+		switch h.indexType {
+		case Block:
+			key = bitcoinFirstHeight
+		case RegularFilter:
+			key = regFilterFirstHeight
+		default:
+			return fmt.Errorf("unknown first height index type: %v", h.indexType)
+		}
+
+		value := rootBucket.Get(key)
+		if value == nil {
+			return nil
+		}
+		height = binary.BigEndian.Uint32(value)
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+
+	return height, nil
 }
 
 // heightFromHash returns the height of the entry that matches the specified

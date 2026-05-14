@@ -24,6 +24,14 @@ type Daemon struct {
 }
 
 func NewDaemon(chain, dataDir, peerAddress, proxyAddress string) (*Daemon, error) {
+	return NewDaemonWithRestoreCheckpoint(chain, dataDir, peerAddress, proxyAddress, "")
+}
+
+func NewDaemonWithRestoreCheckpoint(chain, dataDir, peerAddress, proxyAddress, restoreCheckpoint string) (*Daemon, error) {
+	if err := bootstrapRestoreCheckpoint(dataDir, restoreCheckpoint); err != nil {
+		return nil, err
+	}
+
 	server, err := mwebd.NewServer2(&mwebd.ServerArgs{
 		Chain:     chain,
 		DataDir:   dataDir,

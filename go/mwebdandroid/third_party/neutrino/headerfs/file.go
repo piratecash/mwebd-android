@@ -56,6 +56,18 @@ func (h *headerStore) readRaw(seekDist uint64) ([]byte, error) {
 	return rawHeader, nil
 }
 
+func (h *headerStore) offsetForHeight(height uint32, headerSize uint32) (uint64, error) {
+	if height < h.baseHeight {
+		return 0, &ErrHeaderNotFound{fmt.Errorf("height %d is below first stored height %d", height, h.baseHeight)}
+	}
+
+	return uint64(height-h.baseHeight) * uint64(headerSize), nil
+}
+
+func (h *headerStore) fileTipHeight(fileSize int64, headerSize uint32) uint32 {
+	return h.baseHeight + uint32(fileSize/int64(headerSize)) - 1
+}
+
 // readHeaderRange will attempt to fetch a series of block headers within the
 // target height range. This method batches a set of reads into a single system
 // call thereby increasing performance when reading a set of contiguous
@@ -69,7 +81,7 @@ func (h *blockHeaderStore) readHeaderRange(startHeight uint32,
 	// Based on the defined header type, we'll determine the number of
 	// bytes that we need to read from the file.
 	headerReader, err := readHeadersFromFile(
-		h.file, BlockHeaderSize, startHeight, endHeight,
+		h.file, h.baseHeight, BlockHeaderSize, startHeight, endHeight,
 	)
 	if err != nil {
 		return nil, err
@@ -98,7 +110,10 @@ func (h *blockHeaderStore) readHeader(height uint32) (wire.BlockHeader, error) {
 
 	// Each header is 80 bytes, so using this information, we'll seek a
 	// distance to cover that height based on the size of block headers.
-	seekDistance := uint64(height) * 80
+	seekDistance, err := h.offsetForHeight(height, BlockHeaderSize)
+	if err != nil {
+		return header, err
+	}
 
 	// With the distance calculated, we'll raw a raw header start from that
 	// offset.
@@ -119,7 +134,10 @@ func (h *blockHeaderStore) readHeader(height uint32) (wire.BlockHeader, error) {
 // readHeader reads a single filter header at the specified height from the
 // flat files on disk.
 func (f *FilterHeaderStore) readHeader(height uint32) (*chainhash.Hash, error) {
-	seekDistance := uint64(height) * 32
+	seekDistance, err := f.offsetForHeight(height, RegularFilterHeaderSize)
+	if err != nil {
+		return nil, err
+	}
 
 	rawHeader, err := f.readRaw(seekDistance)
 	if err != nil {
@@ -142,7 +160,7 @@ func (f *FilterHeaderStore) readHeaderRange(startHeight uint32,
 	// Based on the defined header type, we'll determine the number of
 	// bytes that we need to read from the file.
 	headerReader, err := readHeadersFromFile(
-		f.file, RegularFilterHeaderSize, startHeight, endHeight,
+		f.file, f.baseHeight, RegularFilterHeaderSize, startHeight, endHeight,
 	)
 	if err != nil {
 		return nil, err
@@ -166,12 +184,16 @@ func (f *FilterHeaderStore) readHeaderRange(startHeight uint32,
 
 // readHeadersFromFile reads a chunk of headers, each of size headerSize, from
 // the given file, from startHeight to endHeight.
-func readHeadersFromFile(f *os.File, headerSize, startHeight,
+func readHeadersFromFile(f *os.File, baseHeight, headerSize, startHeight,
 	endHeight uint32) (*bytes.Reader, error) {
+
+	if startHeight < baseHeight {
+		return nil, &ErrHeaderNotFound{fmt.Errorf("height %d is below first stored height %d", startHeight, baseHeight)}
+	}
 
 	// Each header is headerSize bytes, so using this information, we'll
 	// seek a distance to cover that height based on the size the headers.
-	seekDistance := uint64(startHeight) * uint64(headerSize)
+	seekDistance := uint64(startHeight-baseHeight) * uint64(headerSize)
 
 	// Based on the number of headers in the range, we'll allocate a single
 	// slice that's able to hold the entire range of headers.

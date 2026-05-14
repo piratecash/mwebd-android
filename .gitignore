@@ -8,3 +8,4 @@ local.properties
 # Go
 go/**/vendor/
 go/**/bin/
+go/mwebdandroid/mwebcheckpoint

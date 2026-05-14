@@ -18,20 +18,16 @@ type mwebHeadersQuery struct {
 }
 
 func (b *blockManager) getMwebHeaders(lastHeight uint32) error {
-	var height uint32
-	switch b.cfg.ChainParams.Net {
-	case wire.MainNet:
-		height = 2265984
-	case wire.TestNet4:
-		height = 2215584
-	case wire.TestNet:
-		height = 432
-	}
-
 	heightMap, err := b.cfg.MwebCoins.GetLeavesAtHeight()
 	if err != nil {
 		return err
 	}
+
+	leafset, err := b.cfg.MwebCoins.GetLeafset()
+	if err != nil {
+		return err
+	}
+	height := mwebHeaderStartHeight(b.cfg.ChainParams.Net, leafset.Height)
 
 	fetch := func(height, stride uint32) error {
 		for height < lastHeight {
@@ -59,6 +55,27 @@ func (b *blockManager) getMwebHeaders(lastHeight uint32) error {
 	}
 
 	return nil
+}
+
+func mwebHeaderStartHeight(net wire.BitcoinNet, leafsetHeight uint32) uint32 {
+	height := mwebActivationHeight(net)
+	if leafsetHeight > height {
+		return leafsetHeight
+	}
+	return height
+}
+
+func mwebActivationHeight(net wire.BitcoinNet) uint32 {
+	switch net {
+	case wire.MainNet:
+		return 2265984
+	case wire.TestNet4:
+		return 2215584
+	case wire.TestNet:
+		return 432
+	default:
+		return 0
+	}
 }
 
 func (b *blockManager) getMwebHeaderBatch(fromHeight, toHeight,

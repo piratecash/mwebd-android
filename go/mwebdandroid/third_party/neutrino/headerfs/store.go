@@ -98,6 +98,8 @@ type headerStore struct {
 
 	file *os.File
 
+	baseHeight uint32
+
 	*headerIndex
 }
 
@@ -107,17 +109,10 @@ type headerStore struct {
 func newHeaderStore(db walletdb.DB, filePath string,
 	hType HeaderType) (*headerStore, error) {
 
-	var flatFileName string
-	switch hType {
-	case Block:
-		flatFileName = "block_headers.bin"
-	case RegularFilter:
-		flatFileName = "reg_filter_headers.bin"
-	default:
-		return nil, fmt.Errorf("unrecognized filter type: %v", hType)
+	flatFileName, err := flatFileName(filePath, hType)
+	if err != nil {
+		return nil, err
 	}
-
-	flatFileName = filepath.Join(filePath, flatFileName)
 
 	// We'll open the file, creating it if necessary and ensuring that all
 	// writes are actually appends to the end of the file.
@@ -133,12 +128,31 @@ func newHeaderStore(db walletdb.DB, filePath string,
 	if err != nil {
 		return nil, err
 	}
+	baseHeight, err := index.firstKnownHeight()
+	if err != nil {
+		return nil, err
+	}
 
 	return &headerStore{
 		fileName:    flatFileName,
 		file:        headerFile,
+		baseHeight:  baseHeight,
 		headerIndex: index,
 	}, nil
+}
+
+func flatFileName(filePath string, hType HeaderType) (string, error) {
+	var name string
+	switch hType {
+	case Block:
+		name = "block_headers.bin"
+	case RegularFilter:
+		name = "reg_filter_headers.bin"
+	default:
+		return "", fmt.Errorf("unrecognized filter type: %v", hType)
+	}
+
+	return filepath.Join(filePath, name), nil
 }
 
 // blockHeaderStore is an implementation of the BlockHeaderStore interface, a
@@ -201,7 +215,7 @@ func NewBlockHeaderStore(filePath string, db walletdb.DB,
 
 	// First, we'll compute the size of the current file so we can
 	// calculate the latest header written to disk.
-	fileHeight := uint32(fileInfo.Size()/80) - 1
+	fileHeight := hStore.fileTipHeight(fileInfo.Size(), BlockHeaderSize)
 
 	// Using the file's current height, fetch the latest on-disk header.
 	latestFileHeader, err := bhs.readHeader(fileHeight)
@@ -329,6 +343,9 @@ func (h *blockHeaderStore) RollbackLastBlock() (*BlockStamp, error) {
 	if err != nil {
 		return nil, err
 	}
+	if chainTipHeight <= h.baseHeight {
+		return nil, &ErrHeaderNotFound{fmt.Errorf("cannot roll back below first stored height %d", h.baseHeight)}
+	}
 
 	// With this height obtained, we'll use it to read the previous header
 	// from disk, so we can populate our return value which requires the
@@ -433,20 +450,20 @@ func (h *blockHeaderStore) blockLocatorFromHash(hash *chainhash.Hash) (
 	// If hash isn't found in DB or this is the genesis block, return the
 	// locator as is.
 	height, err := h.heightFromHash(hash)
-	if height == 0 || err != nil {
+	if height <= h.baseHeight || err != nil {
 		return locator, nil
 	}
 
 	decrement := uint32(1)
-	for height > 0 && len(locator) < wire.MaxBlockLocatorsPerMsg {
+	for height > h.baseHeight && len(locator) < wire.MaxBlockLocatorsPerMsg {
 		// Decrement by 1 for the first 10 blocks, then double the jump
 		// until we get to the genesis hash
 		if len(locator) > 10 {
 			decrement *= 2
 		}
 
-		if decrement > height {
-			height = 0
+		if decrement > height-h.baseHeight {
+			height = h.baseHeight
 		} else {
 			height -= decrement
 		}
@@ -518,13 +535,16 @@ func (h *blockHeaderStore) CheckConnectivity() error {
 		if err != nil {
 			return err
 		}
+		if tipHeight <= h.baseHeight {
+			return nil
+		}
 
 		// We'll now cycle backwards, seeking backwards along the
 		// header file to ensure each header connects properly and the
 		// index entries are also accurate. To do this, we start from a
 		// height of one before our current tip.
 		var newHeader wire.BlockHeader
-		for height := tipHeight - 1; height > 0; height-- {
+		for height := tipHeight - 1; ; height-- {
 			// First, read the block header for this block height,
 			// and also compute the block hash for it.
 			newHeader, err = h.readHeader(height)
@@ -567,6 +587,9 @@ func (h *blockHeaderStore) CheckConnectivity() error {
 			// header pointer to this current location, and
 			// continue our backwards walk.
 			header = newHeader
+			if height == h.baseHeight {
+				break
+			}
 		}
 
 		return nil
@@ -696,7 +719,7 @@ func NewFilterHeaderStore(filePath string, db walletdb.DB,
 
 	// First, we'll compute the size of the current file so we can
 	// calculate the latest header written to disk.
-	fileHeight := uint32(fileInfo.Size()/32) - 1
+	fileHeight := fStore.fileTipHeight(fileInfo.Size(), RegularFilterHeaderSize)
 
 	// Using the file's current height, fetch the latest on-disk header.
 	latestFileHeader, err := fhs.readHeader(fileHeight)
@@ -910,6 +933,9 @@ func (f *FilterHeaderStore) RollbackLastBlock(newTip *chainhash.Hash) (*BlockSta
 	_, chainTipHeight, err := f.chainTip()
 	if err != nil {
 		return nil, err
+	}
+	if chainTipHeight <= f.baseHeight {
+		return nil, &ErrHeaderNotFound{fmt.Errorf("cannot roll back below first stored height %d", f.baseHeight)}
 	}
 
 	// With this height obtained, we'll use it to read what will be the new
