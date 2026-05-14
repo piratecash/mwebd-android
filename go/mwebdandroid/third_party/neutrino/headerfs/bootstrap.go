@@ -98,3 +98,17 @@ func HeaderStoreFilesExist(dataDir string) (bool, error) {
 
 	return false, nil
 }
+
+func RemoveHeaderStoreFiles(dataDir string) error {
+	for _, hType := range []HeaderType{Block, RegularFilter} {
+		name, err := flatFileName(dataDir, hType)
+		if err != nil {
+			return err
+		}
+		if err = os.Remove(name); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+
+	return nil
+}

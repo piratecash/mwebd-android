@@ -127,6 +127,67 @@ func TestBootstrapRestoreCheckpoint_existingDatabase_skipsBootstrap(t *testing.T
 	}
 }
 
+func TestBootstrapRestoreCheckpoint_existingStateBelowCheckpoint_reseeds(t *testing.T) {
+	dataDir := t.TempDir()
+
+	if err := bootstrapRestoreCheckpoint(dataDir, testRestoreCheckpoint(t, 900, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := bootstrapRestoreCheckpoint(dataDir, testRestoreCheckpoint(t, 1000, 16)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertRestoreCheckpointHeight(t, dataDir, 1000)
+}
+
+func TestBootstrapRestoreCheckpoint_existingStateAtCheckpoint_skipsBootstrap(t *testing.T) {
+	dataDir := t.TempDir()
+
+	if err := bootstrapRestoreCheckpoint(dataDir, testRestoreCheckpoint(t, 1000, 16)); err != nil {
+		t.Fatal(err)
+	}
+	if err := bootstrapRestoreCheckpoint(dataDir, testRestoreCheckpoint(t, 900, 16)); err != nil {
+		t.Fatal(err)
+	}
+
+	assertRestoreCheckpointHeight(t, dataDir, 1000)
+}
+
+func assertRestoreCheckpointHeight(t *testing.T, dataDir string, expected uint32) {
+	t.Helper()
+
+	db, err := walletdb.Open(
+		"bdb", filepath.Join(dataDir, "neutrino.db"), false, time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	blockStore, err := headerfs.NewBlockHeaderStore(dataDir, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, blockHeight, err := blockStore.ChainTip()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blockHeight != expected {
+		t.Fatalf("unexpected block height: %d", blockHeight)
+	}
+
+	filterStore, err := headerfs.NewFilterHeaderStore(dataDir, db, headerfs.RegularFilter, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, filterHeight, err := filterStore.ChainTip()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filterHeight != expected {
+		t.Fatalf("unexpected filter height: %d", filterHeight)
+	}
+}
+
 func testRestoreCheckpoint(t *testing.T, height uint32, outputMMRSize uint64) string {
 	t.Helper()
 

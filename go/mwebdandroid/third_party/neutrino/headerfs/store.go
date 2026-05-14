@@ -919,6 +919,13 @@ func (f *FilterHeaderStore) ChainTip() (*chainhash.Hash, uint32, error) {
 	return latestHeader, tipHeight, nil
 }
 
+func (f *FilterHeaderStore) FirstKnownHeight() uint32 {
+	f.mtx.RLock()
+	defer f.mtx.RUnlock()
+
+	return f.baseHeight
+}
+
 // RollbackLastBlock rollsback both the index, and on-disk header file by a
 // _single_ filter header. This method is meant to be used in the case of
 // re-org which disconnects the latest filter header from the end of the main

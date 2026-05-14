@@ -24,12 +24,16 @@ func bootstrapRestoreCheckpoint(dataDir, encodedCheckpoint string) error {
 		return err
 	}
 
-	exists, err := restoreCheckpointStateExists(dataDir)
+	bootstrap, err := shouldBootstrapRestoreCheckpoint(dataDir, restoreCheckpoint.Height)
 	if err != nil {
 		return err
 	}
-	if exists {
+	if !bootstrap {
 		return nil
+	}
+
+	if err = removeRestoreCheckpointState(dataDir); err != nil {
+		return err
 	}
 
 	if err = os.MkdirAll(dataDir, 0755); err != nil {
@@ -77,12 +81,72 @@ func bootstrapRestoreCheckpoint(dataDir, encodedCheckpoint string) error {
 	}, nil)
 }
 
-func restoreCheckpointStateExists(dataDir string) (bool, error) {
-	if exists, err := headerfs.HeaderStoreFilesExist(dataDir); err != nil || exists {
-		return exists, err
+func shouldBootstrapRestoreCheckpoint(dataDir string, checkpointHeight uint32) (bool, error) {
+	headerFilesExist, err := headerfs.HeaderStoreFilesExist(dataDir)
+	if err != nil {
+		return false, err
 	}
 
-	_, err := os.Stat(filepath.Join(dataDir, "neutrino.db"))
+	dbExists, err := fileExists(filepath.Join(dataDir, "neutrino.db"))
+	if err != nil {
+		return false, err
+	}
+	if !headerFilesExist && !dbExists {
+		return true, nil
+	}
+	if !headerFilesExist {
+		return false, nil
+	}
+	if !dbExists {
+		return true, nil
+	}
+
+	return restoreCheckpointStateBehind(dataDir, checkpointHeight)
+}
+
+func restoreCheckpointStateBehind(dataDir string, checkpointHeight uint32) (bool, error) {
+	db, err := walletdb.Open(
+		"bdb", filepath.Join(dataDir, "neutrino.db"), false, time.Minute)
+	if err != nil {
+		return false, err
+	}
+	defer db.Close()
+
+	blockStore, err := headerfs.NewBlockHeaderStore(dataDir, db, nil)
+	if err != nil {
+		return false, err
+	}
+	_, blockHeight, err := blockStore.ChainTip()
+	if err != nil {
+		return false, err
+	}
+
+	filterStore, err := headerfs.NewFilterHeaderStore(dataDir, db, headerfs.RegularFilter, nil, nil)
+	if err != nil {
+		return false, err
+	}
+	_, filterHeight, err := filterStore.ChainTip()
+	if err != nil {
+		return false, err
+	}
+
+	return blockHeight < checkpointHeight || filterHeight < checkpointHeight, nil
+}
+
+func removeRestoreCheckpointState(dataDir string) error {
+	if err := headerfs.RemoveHeaderStoreFiles(dataDir); err != nil {
+		return err
+	}
+
+	err := os.Remove(filepath.Join(dataDir, "neutrino.db"))
+	if err == nil || os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func fileExists(path string) (bool, error) {
+	_, err := os.Stat(path)
 	if err == nil {
 		return true, nil
 	}

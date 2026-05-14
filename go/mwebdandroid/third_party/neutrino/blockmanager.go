@@ -980,6 +980,10 @@ func (b *blockManager) getCheckpointedCFHeaders(checkpoints []*chainhash.Hash,
 		"checkpoint_interval=%v, checkpoints=%v", startingInterval,
 		len(checkpoints))
 
+	if startingInterval >= uint32(len(checkpoints)) {
+		return
+	}
+
 	// We'll determine how many queries we'll make based on our starting
 	// interval and our set of checkpoints. Each query will attempt to fetch
 	// maxCFCheckptsPerQuery intervals worth of filter headers. If
@@ -1956,6 +1960,7 @@ func checkCFCheckptSanity(cp map[string][]*chainhash.Hash,
 	if err != nil {
 		return 0, err
 	}
+	storeBase := headerStore.FirstKnownHeight()
 
 	// Determine the maximum length of each peer's checkpoint list. If they
 	// differ, we don't return yet because we want to make sure they match
@@ -1987,7 +1992,7 @@ func checkCFCheckptSanity(cp map[string][]*chainhash.Hash,
 
 		ckptHeight := uint32((i + 1) * wire.CFCheckptInterval)
 
-		if ckptHeight <= storeTip {
+		if ckptHeight >= storeBase && ckptHeight <= storeTip {
 			header, err := headerStore.FetchHeaderByHeight(
 				ckptHeight,
 			)
