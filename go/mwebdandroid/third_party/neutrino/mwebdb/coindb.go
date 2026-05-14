@@ -37,7 +37,11 @@ var (
 	// unable to be located.
 	ErrCoinNotFound = fmt.Errorf("unable to find coin")
 
-	// ErrLeafNotFound is returned when a leaf is unable to be located.
+	// ErrLeafNotFound is kept for API compatibility.
+	//
+	// Deprecated: PutLeafsetAndPurge skips missing leaf mappings because
+	// sparse restore checkpoints can include leaves outside the locally-known
+	// coin range.
 	ErrLeafNotFound = fmt.Errorf("unable to find leaf")
 
 	// ErrUnexpectedValueLen is returned when the bytes value is
@@ -281,11 +285,16 @@ func (c *CoinStore) PutLeafsetAndPurge(leafset *mweb.Leafset,
 			return err
 		}
 
+		skippedLeaves := 0
 		for _, leafIndex := range removedLeaves {
 			leafIndex := binary.LittleEndian.AppendUint64(nil, leafIndex)
 			outputId := leafBucket.Get(leafIndex)
 			if outputId == nil {
-				return ErrLeafNotFound
+				// This is valid on the first sync after a sparse restore
+				// checkpoint: the checkpoint leafset can contain historical
+				// leaves that were never stored as local coins.
+				skippedLeaves++
+				continue
 			}
 			if err = coinBucket.Delete(outputId); err != nil {
 				return err
@@ -293,6 +302,9 @@ func (c *CoinStore) PutLeafsetAndPurge(leafset *mweb.Leafset,
 			if err = leafBucket.Delete(leafIndex); err != nil {
 				return err
 			}
+		}
+		if skippedLeaves > 0 {
+			log.Debugf("Skipped %d MWEB leaves without local coin mapping during purge", skippedLeaves)
 		}
 
 		return nil

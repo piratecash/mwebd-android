@@ -10,6 +10,7 @@ import (
 	"github.com/ltcmweb/neutrino/blockntfns"
 	"github.com/ltcmweb/neutrino/chanutils"
 	"github.com/ltcmweb/neutrino/filterdb"
+	"github.com/ltcmweb/neutrino/mwebdb"
 	"github.com/ltcmweb/neutrino/pushtx"
 	"github.com/ltcmweb/neutrino/query"
 )
@@ -45,4 +46,5 @@ func UseLogger(logger btclog.Logger) {
 	query.UseLogger(logger)
 	filterdb.UseLogger(logger)
 	chanutils.UseLogger(logger)
+	mwebdb.UseLogger(logger)
 }
