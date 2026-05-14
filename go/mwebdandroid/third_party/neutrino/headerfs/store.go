@@ -37,6 +37,10 @@ type BlockHeaderStore interface {
 	// BlockHeaderStore.
 	ChainTip() (*wire.BlockHeader, uint32, error)
 
+	// FirstKnownHeight returns the store base height: the lowest height
+	// with a persisted header. It is zero for stores synced from genesis.
+	FirstKnownHeight() uint32
+
 	// LatestBlockLocator returns the latest block locator object based on
 	// the tip of the current main chain from the PoV of the
 	// BlockHeaderStore.
@@ -616,6 +620,17 @@ func (h *blockHeaderStore) ChainTip() (*wire.BlockHeader, uint32, error) {
 	}
 
 	return &latestHeader, tipHeight, nil
+}
+
+// FirstKnownHeight returns the store base height: the lowest height with a
+// persisted header. It is zero for stores synced from genesis.
+//
+// NOTE: Part of the BlockHeaderStore interface.
+func (h *blockHeaderStore) FirstKnownHeight() uint32 {
+	h.mtx.RLock()
+	defer h.mtx.RUnlock()
+
+	return h.baseHeight
 }
 
 // FilterHeaderStore is an implementation of a fully fledged database for any

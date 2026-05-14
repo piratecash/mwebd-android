@@ -12,8 +12,9 @@ import (
 // mockBlockHeaderStore is an implementation of the BlockHeaderStore backed by
 // a simple map.
 type mockBlockHeaderStore struct {
-	headers map[chainhash.Hash]wire.BlockHeader
-	heights map[uint32]wire.BlockHeader
+	firstKnownHeight uint32
+	headers          map[chainhash.Hash]wire.BlockHeader
+	heights          map[uint32]wire.BlockHeader
 }
 
 // A compile-time check to ensure the mockBlockHeaderStore adheres to the
@@ -36,6 +37,11 @@ func (m *mockBlockHeaderStore) ChainTip() (*wire.BlockHeader,
 
 	return nil, 0, nil
 }
+
+func (m *mockBlockHeaderStore) FirstKnownHeight() uint32 {
+	return m.firstKnownHeight
+}
+
 func (m *mockBlockHeaderStore) LatestBlockLocator() (
 	blockchain.BlockLocator, error) {
 

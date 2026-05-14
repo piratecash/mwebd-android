@@ -2895,9 +2895,9 @@ func (b *blockManager) checkHeaderSanity(blockHeader *wire.BlockHeader,
 		b.maxRetargetTimespan,
 	)
 
-	var emptyFlags blockchain.BehaviorFlags
+	contextFlags := b.headerSanityFlags(prevNodeHeight)
 	err := blockchain.CheckBlockHeaderContext(
-		blockHeader, parentHeaderCtx, emptyFlags, chainCtx, true,
+		blockHeader, parentHeaderCtx, contextFlags, chainCtx, true,
 	)
 	if err != nil {
 		return err
@@ -2905,8 +2905,49 @@ func (b *blockManager) checkHeaderSanity(blockHeader *wire.BlockHeader,
 
 	return blockchain.CheckBlockHeaderSanity(
 		blockHeader, b.cfg.ChainParams.PowLimit, b.cfg.TimeSource,
-		emptyFlags,
+		blockchain.BFNone,
 	)
+}
+
+func (b *blockManager) headerSanityFlags(prevNodeHeight int32) blockchain.BehaviorFlags {
+	if b.cfg.ChainParams.PoWNoRetargeting {
+		return blockchain.BFNone
+	}
+	if !sparseCheckpointFastAddRequired(
+		prevNodeHeight, b.cfg.BlockHeaders.FirstKnownHeight(),
+		b.blocksPerRetarget,
+	) {
+		return blockchain.BFNone
+	}
+
+	// Sparse checkpoints trust the seeded header, but Litecoin's first
+	// retarget after it needs one ancestor just before the stored range.
+	// We tolerate skipping median-time-past for this single boundary
+	// header because its median window can also cross that missing range.
+	return blockchain.BFFastAdd
+}
+
+func sparseCheckpointFastAddRequired(prevNodeHeight int32, firstKnownHeight uint32,
+	blocksPerRetarget int32) bool {
+
+	if prevNodeHeight < 0 || blocksPerRetarget <= 0 {
+		return false
+	}
+
+	nextHeight := prevNodeHeight + 1
+	if nextHeight%blocksPerRetarget != 0 {
+		return false
+	}
+
+	// Match calcNextRequiredDifficulty: the first chain retarget uses a
+	// shorter distance, while later retargets use the full period.
+	retargetDistance := blocksPerRetarget - 1
+	if nextHeight != blocksPerRetarget {
+		retargetDistance = blocksPerRetarget
+	}
+
+	ancestorHeight := prevNodeHeight - retargetDistance
+	return ancestorHeight >= 0 && uint32(ancestorHeight) < firstKnownHeight
 }
 
 // onBlockConnected queues a block notification that extends the current chain.
