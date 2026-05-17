@@ -3,6 +3,7 @@ package mwebdandroid
 import (
 	"context"
 	"errors"
+	"log"
 	"strings"
 	"sync"
 
@@ -306,6 +307,7 @@ func (l *StringList) Csv() string {
 
 type UtxoListener interface {
 	OnUtxo(utxo *Utxo)
+	OnReplayComplete(height int64)
 	OnError(message string)
 	OnComplete()
 }
@@ -335,9 +337,30 @@ func (s *utxoStream) Send(utxo *proto.Utxo) error {
 	case <-s.ctx.Done():
 		return s.ctx.Err()
 	default:
+		if isReplayCompleteSentinel(utxo) {
+			s.listener.OnReplayComplete(int64(utxo.ReplayCompleteHeight))
+			return nil
+		}
+		if isMalformedReplayCompleteSentinel(utxo) {
+			log.Printf("mwebdandroid: dropping malformed replay-complete UTXO message at height %d", utxo.ReplayCompleteHeight)
+			return nil
+		}
 		s.listener.OnUtxo(newUtxo(utxo))
 		return nil
 	}
+}
+
+func isReplayCompleteSentinel(utxo *proto.Utxo) bool {
+	return utxo.ReplayCompleteHeight > 0 &&
+		utxo.Height == 0 &&
+		utxo.Value == 0 &&
+		utxo.Address == "" &&
+		utxo.OutputId == "" &&
+		utxo.BlockTime == 0
+}
+
+func isMalformedReplayCompleteSentinel(utxo *proto.Utxo) bool {
+	return utxo.ReplayCompleteHeight > 0 && !isReplayCompleteSentinel(utxo)
 }
 
 func (s *utxoStream) SetHeader(metadata.MD) error {
