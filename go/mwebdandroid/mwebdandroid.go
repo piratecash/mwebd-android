@@ -3,6 +3,7 @@ package mwebdandroid
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync"
@@ -160,6 +161,17 @@ func (d *Daemon) Broadcast(rawTx []byte) (*BroadcastResult, error) {
 	return &BroadcastResult{txId: response.Txid}, nil
 }
 
+// copyScanSecret returns a Go-owned copy of the scan secret. gomobile passes
+// []byte arguments as transient views over a JNI buffer that is released once
+// the bound call returns. SubscribeUtxos hands the secret to a goroutine that
+// runs after it returns, so the copy must be made synchronously here, while the
+// buffer is still valid — otherwise the goroutine reads freed memory.
+func copyScanSecret(scanSecret []byte) []byte {
+	owned := make([]byte, len(scanSecret))
+	copy(owned, scanSecret)
+	return owned
+}
+
 func (d *Daemon) SubscribeUtxos(fromHeight int64, scanSecret []byte, listener UtxoListener) (*UtxoSubscription, error) {
 	if d == nil || d.server == nil {
 		return nil, errors.New("mwebd daemon is not initialized")
@@ -168,11 +180,24 @@ func (d *Daemon) SubscribeUtxos(fromHeight int64, scanSecret []byte, listener Ut
 		return nil, errors.New("utxo listener is nil")
 	}
 
+	// Copy the transient gomobile buffer now, before the goroutine below uses
+	// it past this function's return (see copyScanSecret).
+	scanSecret = copyScanSecret(scanSecret)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	subscription := &UtxoSubscription{cancel: cancel, done: make(chan struct{})}
 
 	go func() {
 		defer close(subscription.done)
+		// A panic inside the streaming goroutine (e.g. a runtime fault deep in
+		// the daemon) must never abort the host app: surface it as an error.
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("mwebdandroid: recovered panic in utxo stream: %v", r)
+				listener.OnError(fmt.Sprintf("utxo stream panic: %v", r))
+				listener.OnComplete()
+			}
+		}()
 		err := d.server.Utxos(&proto.UtxosRequest{
 			FromHeight: int32(fromHeight),
 			ScanSecret: scanSecret,

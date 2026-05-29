@@ -262,26 +262,45 @@ func (s *Server) filterUtxos(scanSecret *mw.SecretKey,
 	return
 }
 
+// registerStreamer adds u to the set of streamers for scanSecret. The deferred
+// unlock guarantees s.mtx is released even if the map write panics, so a single
+// bad registration cannot wedge every other subscriber on a leaked lock.
+func (s *Server) registerStreamer(scanSecret mw.SecretKey, u *utxoStreamer) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	if s.utxoChan[scanSecret] == nil {
+		s.utxoChan[scanSecret] = map[*utxoStreamer]struct{}{}
+	}
+	s.utxoChan[scanSecret][u] = struct{}{}
+}
+
+// unregisterStreamer removes u and drops the scanSecret entry once it is empty.
+func (s *Server) unregisterStreamer(scanSecret mw.SecretKey, u *utxoStreamer) {
+	s.mtx.Lock()
+	defer s.mtx.Unlock()
+	delete(s.utxoChan[scanSecret], u)
+	if len(s.utxoChan[scanSecret]) == 0 {
+		delete(s.utxoChan, scanSecret)
+	}
+}
+
 func (s *Server) Utxos(req *proto.UtxosRequest,
 	stream proto.Rpc_UtxosServer) (err error) {
 
-	scanSecret := (*mw.SecretKey)(req.ScanSecret)
-	u := s.newUtxoStreamer(scanSecret)
-	s.mtx.Lock()
-	if s.utxoChan[*scanSecret] == nil {
-		s.utxoChan[*scanSecret] = map[*utxoStreamer]struct{}{}
+	if len(req.ScanSecret) != len(mw.SecretKey{}) {
+		return fmt.Errorf("invalid scan secret length: %d", len(req.ScanSecret))
 	}
-	s.utxoChan[*scanSecret][u] = struct{}{}
-	s.mtx.Unlock()
+	// Snapshot the caller-owned scan secret. The request slice may be reused or
+	// mutated by the caller after this call, and the key is dereferenced more
+	// than once during registration; a stable copy keeps the map key consistent.
+	var scanSecret mw.SecretKey
+	copy(scanSecret[:], req.ScanSecret)
 
+	u := s.newUtxoStreamer(&scanSecret)
+	s.registerStreamer(scanSecret, u)
 	defer func() {
 		close(u.quit)
-		s.mtx.Lock()
-		delete(s.utxoChan[*scanSecret], u)
-		if len(s.utxoChan[*scanSecret]) == 0 {
-			delete(s.utxoChan, *scanSecret)
-		}
-		s.mtx.Unlock()
+		s.unregisterStreamer(scanSecret, u)
 	}()
 
 	heightMap, err := s.cs.MwebCoinDB.GetLeavesAtHeight()
@@ -312,7 +331,7 @@ func (s *Server) Utxos(req *proto.UtxosRequest,
 			if err != nil {
 				return err
 			}
-			for _, utxo := range s.filterUtxos(scanSecret, utxos) {
+			for _, utxo := range s.filterUtxos(&scanSecret, utxos) {
 				if err = stream.Send(utxo); err != nil {
 					return err
 				}
@@ -323,9 +342,20 @@ func (s *Server) Utxos(req *proto.UtxosRequest,
 	if err = sendReplayComplete(stream, uint32(u.lfs.Height)); err != nil {
 		return err
 	}
-	for ; err == nil; err = stream.Send(<-u.ch) {
+	// Stream live UTXOs until the client cancels. Select on the stream context
+	// so cancellation wakes us immediately instead of parking on <-u.ch until
+	// the next notify, which may never arrive on an idle chain.
+	ctx := stream.Context()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case utxo := <-u.ch:
+			if err = stream.Send(utxo); err != nil {
+				return err
+			}
+		}
 	}
-	return
 }
 
 // sendReplayComplete marks the end of the historical replay phase so clients can
