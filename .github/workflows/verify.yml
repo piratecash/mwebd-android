@@ -74,6 +74,7 @@ jobs:
             macos-arm64) [[ "$(uname -m)" == arm64 ]] ;;
           esac
       - name: Test desktop transport
+        shell: bash
         run: ./gradlew :transport-jvm:test :mwebd-kmp:desktopTest
       - name: Locate sidecar
         id: sidecar
