@@ -15,3 +15,7 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "mwebd-android"
+
+include(":mwebd-kmp")
+include(":native-android")
+include(":transport-jvm")

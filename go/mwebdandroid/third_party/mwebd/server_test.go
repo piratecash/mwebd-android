@@ -21,8 +21,23 @@ func TestSendReplayComplete_sendsSnapshotHeight(t *testing.T) {
 	if stream.utxos[0].ReplayCompleteHeight != 3_108_749 {
 		t.Fatalf("unexpected replay complete height: %d", stream.utxos[0].ReplayCompleteHeight)
 	}
+	if !stream.utxos[0].ReplayComplete {
+		t.Fatal("expected explicit replay complete marker")
+	}
 	if stream.utxos[0].Height != 0 || stream.utxos[0].OutputId != "" || stream.utxos[0].Value != 0 {
 		t.Fatalf("replay complete sentinel must not look like a regular UTXO: %+v", stream.utxos[0])
+	}
+}
+
+func TestSendReplayComplete_heightZero_setsExplicitMarker(t *testing.T) {
+	stream := &recordingUtxosStream{}
+
+	if err := sendReplayComplete(stream, 0); err != nil {
+		t.Fatalf("sendReplayComplete returned error: %v", err)
+	}
+
+	if len(stream.utxos) != 1 || !stream.utxos[0].ReplayComplete {
+		t.Fatalf("expected explicit replay marker, got %+v", stream.utxos)
 	}
 }
 

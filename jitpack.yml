@@ -1,8 +1,9 @@
 jdk:
-  - openjdk17
+  - openjdk21
 
 before_install:
   - bash scripts/install-go.sh
+  - bash scripts/download-sidecars.sh "$VERSION" "$PWD/.sidecars"
 
 install:
-  - export ANDROID_HOME="$HOME/android-sdk" ANDROID_SDK_ROOT="$HOME/android-sdk" ANDROID_NDK_HOME="$HOME/android-sdk/ndk/27.0.12077973" PATH="$HOME/.go/bin:$HOME/go/bin:$PATH" && bash scripts/install-android-sdk.sh && ./gradlew publishToMavenLocal
+  - export ANDROID_HOME="$HOME/android-sdk" ANDROID_SDK_ROOT="$HOME/android-sdk" ANDROID_NDK_HOME="$HOME/android-sdk/ndk/27.0.12077973" PATH="$HOME/.go/bin:$HOME/go/bin:$PATH" && bash scripts/install-android-sdk.sh && ./gradlew -PVERSION_NAME="$VERSION" -PsidecarAssetsDir="$PWD/.sidecars" publishToMavenLocal

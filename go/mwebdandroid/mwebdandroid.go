@@ -17,12 +17,35 @@ const (
 	ChainMainnet = "mainnet"
 	ChainTestnet = "testnet"
 	ChainRegtest = "regtest"
+
+	upstreamVersion = "0.1.19"
+)
+
+var (
+	artifactVersion = "0.0.0-SNAPSHOT"
+	commitSHA       = "unknown"
+)
+
+type daemonState uint8
+
+const (
+	daemonNew daemonState = iota
+	daemonStarting
+	daemonRunning
+	daemonStopping
+	daemonStopped
 )
 
 type Daemon struct {
-	server *mwebd.Server
-	mu     sync.Mutex
-	port   int
+	server        *mwebd.Server
+	mu            sync.Mutex
+	state         daemonState
+	port          int
+	ctx           context.Context
+	cancel        context.CancelFunc
+	operations    sync.WaitGroup
+	subscriptions map[*UtxoSubscription]struct{}
+	stopOnce      sync.Once
 }
 
 func NewDaemon(chain, dataDir, peerAddress, proxyAddress string) (*Daemon, error) {
@@ -43,30 +66,53 @@ func NewDaemonWithRestoreCheckpoint(chain, dataDir, peerAddress, proxyAddress, r
 	if err != nil {
 		return nil, err
 	}
-	return &Daemon{server: server}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Daemon{
+		server:        server,
+		state:         daemonNew,
+		ctx:           ctx,
+		cancel:        cancel,
+		subscriptions: map[*UtxoSubscription]struct{}{},
+	}, nil
 }
 
 func AddressesMainnet(scanSecret, spendPubKey []byte, fromIndex, toIndex int64) string {
 	return mwebd.Addresses(scanSecret, spendPubKey, int32(fromIndex), int32(toIndex))
 }
 
+func Version() string {
+	return fmt.Sprintf("ltcmweb/mwebd v%s, mwebd-kmp %s (%s)", upstreamVersion, artifactVersion, commitSHA)
+}
+
 func (d *Daemon) Start(port int64) (int64, error) {
 	if d == nil || d.server == nil {
 		return 0, errors.New("mwebd daemon is not initialized")
+	}
+	if port < 0 || port > 65535 {
+		return 0, errors.New("mwebd port is outside 0..65535")
 	}
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	if d.port != 0 {
+	if d.state == daemonRunning {
 		return int64(d.port), nil
 	}
+	if d.state != daemonNew {
+		return 0, errors.New("mwebd daemon cannot be started in its current state")
+	}
+	d.state = daemonStarting
 
 	startedPort, err := d.server.Start(int(port))
 	if err != nil {
+		d.state = daemonStopping
+		d.cancel()
+		_ = d.server.Stop()
+		d.state = daemonStopped
 		return 0, err
 	}
 	d.port = startedPort
+	d.state = daemonRunning
 	return int64(startedPort), nil
 }
 
@@ -75,19 +121,41 @@ func (d *Daemon) Stop() {
 		return
 	}
 
-	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.stopOnce.Do(func() {
+		d.mu.Lock()
+		if d.state == daemonStopped {
+			d.mu.Unlock()
+			return
+		}
+		d.state = daemonStopping
+		d.cancel()
+		subscriptions := make([]*UtxoSubscription, 0, len(d.subscriptions))
+		for subscription := range d.subscriptions {
+			subscriptions = append(subscriptions, subscription)
+		}
+		d.mu.Unlock()
 
-	d.server.Stop()
-	d.port = 0
+		for _, subscription := range subscriptions {
+			subscription.cancelStream()
+		}
+		d.operations.Wait()
+		_ = d.server.Stop()
+
+		d.mu.Lock()
+		d.port = 0
+		d.state = daemonStopped
+		d.mu.Unlock()
+	})
 }
 
 func (d *Daemon) Status() (*Status, error) {
-	if d == nil || d.server == nil {
-		return nil, errors.New("mwebd daemon is not initialized")
+	ctx, done, err := d.beginOperation()
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 
-	status, err := d.server.Status(context.Background(), &proto.StatusRequest{})
+	status, err := d.server.Status(ctx, &proto.StatusRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -95,11 +163,16 @@ func (d *Daemon) Status() (*Status, error) {
 }
 
 func (d *Daemon) Addresses(scanSecret, spendPubKey []byte, fromIndex, toIndex int64) (*StringList, error) {
-	if d == nil || d.server == nil {
-		return nil, errors.New("mwebd daemon is not initialized")
+	if fromIndex < 0 || toIndex < fromIndex || toIndex > int64(^uint32(0)) {
+		return nil, errors.New("invalid address index range")
 	}
+	ctx, done, err := d.beginOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 
-	response, err := d.server.Addresses(context.Background(), &proto.AddressRequest{
+	response, err := d.server.Addresses(ctx, &proto.AddressRequest{
 		ScanSecret:  scanSecret,
 		SpendPubkey: spendPubKey,
 		FromIndex:   uint32(fromIndex),
@@ -112,12 +185,14 @@ func (d *Daemon) Addresses(scanSecret, spendPubKey []byte, fromIndex, toIndex in
 }
 
 func (d *Daemon) Spent(outputIdsCsv string) (*StringList, error) {
-	if d == nil || d.server == nil {
-		return nil, errors.New("mwebd daemon is not initialized")
+	ctx, done, err := d.beginOperation()
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 
 	outputIds := splitCsv(outputIdsCsv)
-	response, err := d.server.Spent(context.Background(), &proto.SpentRequest{
+	response, err := d.server.Spent(ctx, &proto.SpentRequest{
 		OutputId: outputIds,
 	})
 	if err != nil {
@@ -127,11 +202,16 @@ func (d *Daemon) Spent(outputIdsCsv string) (*StringList, error) {
 }
 
 func (d *Daemon) Create(rawTx, scanSecret, spendSecret []byte, feeRatePerKb int64, dryRun bool) (*CreateResult, error) {
-	if d == nil || d.server == nil {
-		return nil, errors.New("mwebd daemon is not initialized")
+	if feeRatePerKb < 0 {
+		return nil, errors.New("fee rate must not be negative")
 	}
+	ctx, done, err := d.beginOperation()
+	if err != nil {
+		return nil, err
+	}
+	defer done()
 
-	response, err := d.server.Create(context.Background(), &proto.CreateRequest{
+	response, err := d.server.Create(ctx, &proto.CreateRequest{
 		RawTx:        rawTx,
 		ScanSecret:   scanSecret,
 		SpendSecret:  spendSecret,
@@ -148,11 +228,13 @@ func (d *Daemon) Create(rawTx, scanSecret, spendSecret []byte, feeRatePerKb int6
 }
 
 func (d *Daemon) Broadcast(rawTx []byte) (*BroadcastResult, error) {
-	if d == nil || d.server == nil {
-		return nil, errors.New("mwebd daemon is not initialized")
+	ctx, done, err := d.beginOperation()
+	if err != nil {
+		return nil, err
 	}
+	defer done()
 
-	response, err := d.server.Broadcast(context.Background(), &proto.BroadcastRequest{
+	response, err := d.server.Broadcast(ctx, &proto.BroadcastRequest{
 		RawTx: rawTx,
 	})
 	if err != nil {
@@ -173,22 +255,36 @@ func copyScanSecret(scanSecret []byte) []byte {
 }
 
 func (d *Daemon) SubscribeUtxos(fromHeight int64, scanSecret []byte, listener UtxoListener) (*UtxoSubscription, error) {
-	if d == nil || d.server == nil {
-		return nil, errors.New("mwebd daemon is not initialized")
-	}
 	if listener == nil {
 		return nil, errors.New("utxo listener is nil")
+	}
+	if fromHeight < 0 || fromHeight > int64(^uint32(0)>>1) {
+		return nil, errors.New("invalid UTXO start height")
 	}
 
 	// Copy the transient gomobile buffer now, before the goroutine below uses
 	// it past this function's return (see copyScanSecret).
 	scanSecret = copyScanSecret(scanSecret)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	d.mu.Lock()
+	if d.server == nil || d.state != daemonRunning {
+		d.mu.Unlock()
+		return nil, errors.New("mwebd daemon is not running")
+	}
+	ctx, cancel := context.WithCancel(d.ctx)
 	subscription := &UtxoSubscription{cancel: cancel, done: make(chan struct{})}
+	d.operations.Add(1)
+	d.subscriptions[subscription] = struct{}{}
+	d.mu.Unlock()
 
 	go func() {
-		defer close(subscription.done)
+		defer func() {
+			d.mu.Lock()
+			delete(d.subscriptions, subscription)
+			d.mu.Unlock()
+			d.operations.Done()
+			close(subscription.done)
+		}()
 		// A panic inside the streaming goroutine (e.g. a runtime fault deep in
 		// the daemon) must never abort the host app: surface it as an error.
 		defer func() {
@@ -212,6 +308,19 @@ func (d *Daemon) SubscribeUtxos(fromHeight int64, scanSecret []byte, listener Ut
 	}()
 
 	return subscription, nil
+}
+
+func (d *Daemon) beginOperation() (context.Context, func(), error) {
+	if d == nil {
+		return nil, nil, errors.New("mwebd daemon is not initialized")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.server == nil || d.state != daemonRunning {
+		return nil, nil, errors.New("mwebd daemon is not running")
+	}
+	d.operations.Add(1)
+	return d.ctx, d.operations.Done, nil
 }
 
 type Status struct {
@@ -347,6 +456,11 @@ func (s *UtxoSubscription) Close() {
 	if s == nil {
 		return
 	}
+	s.cancelStream()
+	<-s.done
+}
+
+func (s *UtxoSubscription) cancelStream() {
 	s.once.Do(func() {
 		s.cancel()
 	})
@@ -376,7 +490,7 @@ func (s *utxoStream) Send(utxo *proto.Utxo) error {
 }
 
 func isReplayCompleteSentinel(utxo *proto.Utxo) bool {
-	return utxo.ReplayCompleteHeight > 0 &&
+	return utxo.ReplayComplete &&
 		utxo.Height == 0 &&
 		utxo.Value == 0 &&
 		utxo.Address == "" &&
@@ -385,7 +499,7 @@ func isReplayCompleteSentinel(utxo *proto.Utxo) bool {
 }
 
 func isMalformedReplayCompleteSentinel(utxo *proto.Utxo) bool {
-	return utxo.ReplayCompleteHeight > 0 && !isReplayCompleteSentinel(utxo)
+	return utxo.ReplayComplete && !isReplayCompleteSentinel(utxo)
 }
 
 func (s *utxoStream) SetHeader(metadata.MD) error {
