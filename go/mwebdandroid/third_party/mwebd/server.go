@@ -33,6 +33,8 @@ import (
 	_ "github.com/ltcsuite/ltcwallet/walletdb/bdb"
 	"golang.org/x/net/proxy"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -46,14 +48,29 @@ type Server struct {
 	utxoChan  map[mw.SecretKey]map[*utxoStreamer]struct{}
 	coinCache *lru.Cache[mw.SecretKey, *lru.Cache[chainhash.Hash, *mweb.Coin]]
 	ledgerTx  *ledger.TxContext
+
+	lifecycleMu sync.Mutex
+	started     bool
+	stopping    bool
+	accepting   bool
+	done        chan struct{}
+	cleanupOnce sync.Once
+	operations  sync.WaitGroup
+	cleanupErr  error
 }
 
 type ServerArgs struct {
 	Chain, DataDir, PeerAddr, ProxyAddr string
+	UnaryInterceptors                   []grpc.UnaryServerInterceptor
+	StreamInterceptors                  []grpc.StreamServerInterceptor
 }
 
 func NewBareServer(chainParams chaincfg.Params) *Server {
-	return &Server{cp: chainParams}
+	return &Server{
+		cp:       chainParams,
+		done:     make(chan struct{}),
+		utxoChan: map[mw.SecretKey]map[*utxoStreamer]struct{}{},
+	}
 }
 
 func NewServer(chain, dataDir, peer string) (*Server, error) {
@@ -63,11 +80,32 @@ func NewServer(chain, dataDir, peer string) (*Server, error) {
 }
 
 func NewServer2(args *ServerArgs) (s *Server, err error) {
-	s = &Server{server: grpc.NewServer()}
+	if args == nil {
+		return nil, errors.New("server args are required")
+	}
+
+	s = NewBareServer(chaincfg.MainNetParams)
+	unaryInterceptors := append(
+		[]grpc.UnaryServerInterceptor{s.trackUnaryOperation},
+		args.UnaryInterceptors...,
+	)
+	streamInterceptors := append(
+		[]grpc.StreamServerInterceptor{s.trackStreamOperation},
+		args.StreamInterceptors...,
+	)
+	grpcOptions := []grpc.ServerOption{
+		grpc.ChainUnaryInterceptor(unaryInterceptors...),
+		grpc.ChainStreamInterceptor(streamInterceptors...),
+	}
+	s.server = grpc.NewServer(grpcOptions...)
 	proto.RegisterRpcServer(s.server, s)
 
-	s.utxoChan = map[mw.SecretKey]map[*utxoStreamer]struct{}{}
 	s.coinCache, _ = lru.New[mw.SecretKey, *lru.Cache[chainhash.Hash, *mweb.Coin]](10)
+	defer func() {
+		if err != nil {
+			s.finish(err)
+		}
+	}()
 
 	s.db, err = walletdb.Create(
 		"bdb", filepath.Join(args.DataDir, "neutrino.db"), false, time.Minute)
@@ -122,7 +160,10 @@ func NewServer2(args *ServerArgs) (s *Server, err error) {
 	s.cp = s.cs.ChainParams()
 
 	s.cs.RegisterMwebUtxosCallback(s.utxoHandler)
-	return s, s.cs.Start()
+	if err = s.cs.Start(); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func (s *Server) Start(port int) (int, error) {
@@ -130,39 +171,138 @@ func (s *Server) Start(port int) (int, error) {
 }
 
 func (s *Server) StartAddr(addr string) (int, error) {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.stopping {
+		return 0, errors.New("mwebd server is stopping")
+	}
+	if s.started {
+		return 0, errors.New("mwebd server is already started")
+	}
+
 	lis, err := net.Listen("tcp", addr)
 	if err != nil {
 		return 0, err
 	}
-	if addr[len(addr)-2:] == ":0" {
-		go s.serve(lis)
-		return lis.Addr().(*net.TCPAddr).Port, nil
-	}
-	return 0, s.serve(lis)
+	s.started = true
+	s.accepting = true
+	go s.serve(lis)
+	return lis.Addr().(*net.TCPAddr).Port, nil
 }
 
 func (s *Server) StartUnix(path string) error {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.stopping {
+		return errors.New("mwebd server is stopping")
+	}
+	if s.started {
+		return errors.New("mwebd server is already started")
+	}
+
 	os.Remove(path)
 	lis, err := net.Listen("unix", path)
 	if err != nil {
 		return err
 	}
+	s.started = true
+	s.accepting = true
 	go s.serve(lis)
 	return nil
 }
 
-func (s *Server) serve(lis net.Listener) error {
-	if err := s.server.Serve(lis); err != nil {
-		return err
-	}
-	if err := s.cs.Stop(); err != nil {
-		return err
-	}
-	return s.db.Close()
+func (s *Server) serve(lis net.Listener) {
+	s.finish(s.server.Serve(lis))
 }
 
-func (s *Server) Stop() {
-	s.server.Stop()
+func (s *Server) Stop() error {
+	if s == nil {
+		return nil
+	}
+
+	s.lifecycleMu.Lock()
+	started := s.started
+	s.stopping = true
+	s.accepting = false
+	s.lifecycleMu.Unlock()
+
+	if started && s.server != nil {
+		s.server.Stop()
+	} else {
+		s.finish(nil)
+	}
+	<-s.done
+	return s.cleanupErr
+}
+
+func (s *Server) Wait() error {
+	if s == nil {
+		return nil
+	}
+	<-s.done
+	return s.cleanupErr
+}
+
+func (s *Server) finish(serveErr error) {
+	s.cleanupOnce.Do(func() {
+		s.lifecycleMu.Lock()
+		s.stopping = true
+		s.accepting = false
+		s.lifecycleMu.Unlock()
+
+		if serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) && s.server != nil {
+			s.server.Stop()
+		}
+		s.operations.Wait()
+		var cleanupErr error
+		if s.cs != nil {
+			cleanupErr = errors.Join(cleanupErr, s.cs.Stop())
+		}
+		if s.db != nil {
+			cleanupErr = errors.Join(cleanupErr, s.db.Close())
+		}
+		if serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
+			cleanupErr = errors.Join(serveErr, cleanupErr)
+		}
+		s.cleanupErr = cleanupErr
+		close(s.done)
+	})
+}
+
+func (s *Server) trackUnaryOperation(
+	ctx context.Context,
+	req any,
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (any, error) {
+	if !s.beginOperation(true) {
+		return nil, status.Error(codes.Unavailable, "mwebd server is not running")
+	}
+	defer s.operations.Done()
+	return handler(ctx, req)
+}
+
+func (s *Server) trackStreamOperation(
+	srv any,
+	stream grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	if !s.beginOperation(true) {
+		return status.Error(codes.Unavailable, "mwebd server is not running")
+	}
+	defer s.operations.Done()
+	return handler(srv, stream)
+}
+
+func (s *Server) beginOperation(requireStarted bool) bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.stopping || requireStarted && !s.accepting {
+		return false
+	}
+	s.operations.Add(1)
+	return true
 }
 
 func (s *Server) Status(context.Context,
@@ -199,6 +339,11 @@ func (s *Server) Status(context.Context,
 }
 
 func (s *Server) utxoHandler(lfs *mweb.Leafset, utxos []*wire.MwebNetUtxo) {
+	if !s.beginOperation(false) {
+		return
+	}
+	defer s.operations.Done()
+
 	walletdb.Update(s.db, func(tx walletdb.ReadWriteTx) error {
 		bucket, err := tx.CreateTopLevelBucket([]byte("mweb-mempool"))
 		if err != nil {
@@ -361,7 +506,10 @@ func (s *Server) Utxos(req *proto.UtxosRequest,
 // sendReplayComplete marks the end of the historical replay phase so clients can
 // advance their local delivery cursor only after replayed UTXOs were streamed.
 func sendReplayComplete(stream proto.Rpc_UtxosServer, height uint32) error {
-	return stream.Send(&proto.Utxo{ReplayCompleteHeight: height})
+	return stream.Send(&proto.Utxo{
+		ReplayComplete:       true,
+		ReplayCompleteHeight: height,
+	})
 }
 
 func (s *Server) Addresses(ctx context.Context,
