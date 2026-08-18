@@ -2,12 +2,16 @@ name: Verify
 
 on:
   push:
-    branches: [master]
+    branches: [main]
     tags: ['**']
   pull_request:
 
 permissions:
   contents: read
+
+concurrency:
+  group: verify-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: ${{ github.ref_type == 'tag' }}
 
 env:
   VERSION_NAME: ${{ github.ref_type == 'tag' && github.ref_name || '0.0.0-SNAPSHOT' }}
