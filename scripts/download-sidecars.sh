@@ -29,7 +29,6 @@ download() {
     --silent \
     --show-error \
     --retry 5 \
-    --retry-all-errors \
     --connect-timeout 15 \
     --max-time 300 \
     "${RELEASE_URL}/$1" \
