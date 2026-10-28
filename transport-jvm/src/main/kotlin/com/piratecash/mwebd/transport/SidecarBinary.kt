@@ -55,8 +55,8 @@ object SidecarBinary {
         val platform = SidecarPlatform.current()
         val resourcePath = "mwebd/${platform.directory}/${platform.fileName}"
         val expectedHash = resourceHash(resourcePath)
-        val targetDirectory = cacheRoot().resolve(version()).resolve(expectedHash)
-        createSafeDirectories(targetDirectory)
+        val (base, ownedRoot) = cacheLocation()
+        val targetDirectory = createSafeDirectories(base, ownedRoot.resolve(version()).resolve(expectedHash))
         val target = targetDirectory.resolve(platform.fileName)
         val lock = target.resolveSibling("${platform.fileName}.lock")
         rejectSymlink(lock)
@@ -75,9 +75,10 @@ object SidecarBinary {
     }
 
     fun stageForPackaging(destinationDirectory: Path): Path {
-        createSafeDirectories(destinationDirectory)
+        val absolute = destinationDirectory.toAbsolutePath().normalize()
+        val directory = absolute.parent?.let { createSafeDirectories(it, absolute.fileName) } ?: absolute.toRealPath()
         val source = executable()
-        val destination = destinationDirectory.resolve(source.fileName.toString())
+        val destination = directory.resolve(source.fileName.toString())
         Files.copy(source, destination, StandardCopyOption.REPLACE_EXISTING, LinkOption.NOFOLLOW_LINKS)
         applyOwnerOnlyPermissions(destination)
         return destination
@@ -143,26 +144,27 @@ object SidecarBinary {
         SidecarBinary::class.java.classLoader.getResourceAsStream(resourcePath)
             ?: throw IllegalStateException("Missing sidecar resource: $resourcePath")
 
-    private fun cacheRoot(): Path {
+    private fun cacheLocation(): Pair<Path, Path> {
         val home = Path.of(System.getProperty("user.home"))
         val os = System.getProperty("os.name").orEmpty().lowercase(Locale.ROOT)
         return when {
-            os.contains("mac") -> home.resolve("Library/Caches/PirateCash/mwebd")
+            os.contains("mac") -> home.resolve("Library/Caches") to Path.of("PirateCash/mwebd")
             os.contains("windows") -> {
                 val localAppData = System.getenv("LOCALAPPDATA")?.takeIf(String::isNotBlank)
-                Path.of(localAppData ?: home.resolve("AppData/Local").toString()).resolve("PirateCash/mwebd")
+                Path.of(localAppData ?: home.resolve("AppData/Local").toString()) to Path.of("PirateCash/mwebd")
             }
             else -> {
                 val xdgCache = System.getenv("XDG_CACHE_HOME")?.takeIf(String::isNotBlank)
-                Path.of(xdgCache ?: home.resolve(".cache").toString()).resolve("piratecash/mwebd")
+                Path.of(xdgCache ?: home.resolve(".cache").toString()) to Path.of("piratecash/mwebd")
             }
         }
     }
 
-    private fun createSafeDirectories(path: Path) {
-        val absolute = path.toAbsolutePath().normalize()
-        var current = absolute.root
-        for (part in absolute) {
+    // Ancestors of the base belong to the OS or the user (e.g. /home -> /var/home);
+    // only the directories created here must not be links.
+    internal fun createSafeDirectories(trustedBase: Path, ownedPath: Path): Path {
+        var current = Files.createDirectories(trustedBase).toRealPath()
+        for (part in ownedPath) {
             current = current.resolve(part)
             if (Files.exists(current, LinkOption.NOFOLLOW_LINKS)) {
                 rejectSymlink(current)
@@ -175,6 +177,7 @@ object SidecarBinary {
                 }
             }
         }
+        return current
     }
 
     private fun rejectSymlink(path: Path) {
