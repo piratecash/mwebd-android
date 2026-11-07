@@ -200,12 +200,16 @@ type Utxo struct {
 	OutputId string `protobuf:"bytes,4,opt,name=output_id,json=outputId,proto3" json:"output_id,omitempty"`
 	// The timestamp of the block the utxo was mined in.
 	BlockTime uint32 `protobuf:"varint,5,opt,name=block_time,json=blockTime,proto3" json:"block_time,omitempty"`
+	// Fields 6-8 are left free to reduce collision risk with upstream Utxo additions.
 	// Sentinel sent once after historical replay finishes.
-	// A positive value means all matching UTXOs at or below this
-	// leafset snapshot height have already been streamed.
+	// All matching UTXOs at or below this leafset snapshot height have
+	// already been streamed; zero is valid before the first snapshot.
 	ReplayCompleteHeight uint32 `protobuf:"varint,9,opt,name=replay_complete_height,json=replayCompleteHeight,proto3" json:"replay_complete_height,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Distinguishes replay completion at height zero from the legacy
+	// all-zero initialization marker.
+	ReplayComplete bool `protobuf:"varint,10,opt,name=replay_complete,json=replayComplete,proto3" json:"replay_complete,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Utxo) Reset() {
@@ -278,6 +282,13 @@ func (x *Utxo) GetReplayCompleteHeight() uint32 {
 		return x.ReplayCompleteHeight
 	}
 	return 0
+}
+
+func (x *Utxo) GetReplayComplete() bool {
+	if x != nil {
+		return x.ReplayComplete
+	}
+	return false
 }
 
 type AddressRequest struct {
@@ -1547,7 +1558,7 @@ const file_mwebd_proto_rawDesc = "" +
 	"\vfrom_height\x18\x01 \x01(\x05R\n" +
 	"fromHeight\x12\x1f\n" +
 	"\vscan_secret\x18\x02 \x01(\fR\n" +
-	"scanSecret\"\xc0\x01\n" +
+	"scanSecret\"\xe9\x01\n" +
 	"\x04Utxo\x12\x16\n" +
 	"\x06height\x18\x01 \x01(\x05R\x06height\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\x04R\x05value\x12\x18\n" +
@@ -1555,7 +1566,9 @@ const file_mwebd_proto_rawDesc = "" +
 	"\toutput_id\x18\x04 \x01(\tR\boutputId\x12\x1d\n" +
 	"\n" +
 	"block_time\x18\x05 \x01(\rR\tblockTime\x124\n" +
-	"\x16replay_complete_height\x18\t \x01(\rR\x14replayCompleteHeight\"\x8e\x01\n" +
+	"\x16replay_complete_height\x18\t \x01(\rR\x14replayCompleteHeight\x12'\n" +
+	"\x0freplay_complete\x18\n" +
+	" \x01(\bR\x0ereplayComplete\"\x8e\x01\n" +
 	"\x0eAddressRequest\x12\x1d\n" +
 	"\n" +
 	"from_index\x18\x01 \x01(\rR\tfromIndex\x12\x19\n" +
@@ -1651,7 +1664,8 @@ const file_mwebd_proto_rawDesc = "" +
 	"\vPsbtExtract\x12\x13.PsbtExtractRequest\x1a\x0f.CreateResponse\x12*\n" +
 	"\x0eLedgerExchange\x12\v.LedgerApdu\x1a\v.LedgerApdu\x122\n" +
 	"\tBroadcast\x12\x11.BroadcastRequest\x1a\x12.BroadcastResponse\x12/\n" +
-	"\bCoinswap\x12\x10.CoinswapRequest\x1a\x11.CoinswapResponseB Z\x1egithub.com/ltcmweb/mwebd/protob\x06proto3"
+	"\bCoinswap\x12\x10.CoinswapRequest\x1a\x11.CoinswapResponseBP\n" +
+	"\x1dcom.piratecash.mwebd.protocolB\rMwebdProtocolP\x01Z\x1egithub.com/ltcmweb/mwebd/protob\x06proto3"
 
 var (
 	file_mwebd_proto_rawDescOnce sync.Once

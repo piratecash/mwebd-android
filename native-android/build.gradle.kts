@@ -1,0 +1,193 @@
+import org.gradle.api.attributes.Bundling
+import org.gradle.api.attributes.Category
+import org.gradle.api.attributes.LibraryElements
+import org.gradle.api.attributes.Usage
+import org.gradle.api.attributes.java.TargetJvmEnvironment
+import org.jetbrains.kotlin.gradle.plugin.KotlinPlatformType
+
+plugins {
+    base
+    `maven-publish`
+}
+
+group = "com.github.piratecash.mwebd-android"
+
+val mwebdAar = layout.buildDirectory.file("outputs/aar/mwebd-android.aar")
+val goPackageDir = rootProject.layout.projectDirectory.dir("go/mwebdandroid")
+val xMobileVersion = "v0.0.0-20250210185054-b38b8813d607"
+val android16KbLdFlags = "-linkmode=external -extldflags=-Wl,-z,max-page-size=16384,-z,common-page-size=16384"
+val commitSha = providers.environmentVariable("GITHUB_SHA").orElse(provider { gitCommitSha() })
+val versionLdFlags = provider {
+    listOf(
+        android16KbLdFlags,
+        "-X github.com/piratecash/mwebd-android/go/mwebdandroid.artifactVersion=${project.version}",
+        "-X github.com/piratecash/mwebd-android/go/mwebdandroid.commitSHA=${commitSha.get()}",
+    ).joinToString(" ")
+}
+
+val installGomobileTools by tasks.registering(Exec::class) {
+    workingDir = goPackageDir.asFile
+    commandLine(
+        "bash",
+        "-lc",
+        """
+            set -euo pipefail
+            go install golang.org/x/mobile/cmd/gomobile@${xMobileVersion}
+            go install golang.org/x/mobile/cmd/gobind@${xMobileVersion}
+        """.trimIndent(),
+    )
+}
+
+val initGomobile by tasks.registering(Exec::class) {
+    dependsOn(installGomobileTools)
+    workingDir = goPackageDir.asFile
+    commandLine(
+        "bash",
+        "-lc",
+        """
+            set -euo pipefail
+            export PATH="$(go env GOPATH)/bin:${'$'}PATH"
+            "$(go env GOPATH)/bin/gomobile" init
+        """.trimIndent(),
+    )
+}
+
+val buildMwebdAar by tasks.registering(Exec::class) {
+    dependsOn(initGomobile)
+    workingDir = goPackageDir.asFile
+    inputs.files(rootProject.fileTree(goPackageDir))
+    inputs.property("ldflags", versionLdFlags)
+    inputs.property("xMobileVersion", xMobileVersion)
+    outputs.file(mwebdAar)
+
+    doFirst {
+        mwebdAar.get().asFile.parentFile.mkdirs()
+        commandLine(
+            "bash",
+            "-lc",
+            """
+                set -euo pipefail
+                export PATH="$(go env GOPATH)/bin:${'$'}PATH"
+                "$(go env GOPATH)/bin/gomobile" bind \
+                  -target=android/arm,android/arm64,android/amd64 \
+                  -androidapi=24 \
+                  -javapkg=com.piratecash \
+                  -ldflags='${versionLdFlags.get()}' \
+                  -o "${mwebdAar.get().asFile.absolutePath}" \
+                  .
+            """.trimIndent(),
+        )
+    }
+}
+
+val verifyElfAlignment by tasks.registering(Exec::class) {
+    dependsOn(buildMwebdAar)
+    inputs.file(mwebdAar)
+    val verifyDir = layout.buildDirectory.dir("tmp/verifyElfAlignment")
+    outputs.dir(verifyDir)
+
+    commandLine(
+        "bash",
+        "-lc",
+        """
+            set -euo pipefail
+            work="${verifyDir.get().asFile.absolutePath}"
+            rm -rf "${'$'}work"
+            mkdir -p "${'$'}work"
+            cd "${'$'}work"
+            jar xf "${mwebdAar.get().asFile.absolutePath}"
+
+            readelf=""
+            for candidate in \
+              "${'$'}{ANDROID_NDK_HOME:-}/toolchains/llvm/prebuilt"/*/bin/llvm-readelf \
+              "${'$'}{ANDROID_SDK_ROOT:-${'$'}{ANDROID_HOME:-}}"/ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-readelf \
+              "${'$'}{ANDROID_HOME:-}"/ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-readelf
+            do
+              if [[ -x "${'$'}candidate" ]]; then
+                readelf="${'$'}candidate"
+                break
+              fi
+            done
+
+            if [[ -z "${'$'}readelf" ]]; then
+              echo "llvm-readelf not found; set ANDROID_NDK_HOME or ANDROID_SDK_ROOT"
+              exit 1
+            fi
+
+            failed=0
+            found=0
+            while IFS= read -r so; do
+              found=1
+              while IFS= read -r align; do
+                if (( align < 0x4000 )); then
+                  echo "ELF LOAD alignment ${'$'}align is below 16 KB: ${'$'}so"
+                  failed=1
+                fi
+              done < <("${'$'}readelf" -lW "${'$'}so" | awk '/LOAD/ { print ${'$'}NF }')
+            done < <(find jni -name "*.so" | sort)
+
+            if (( found == 0 )); then
+              echo "No native libraries found in AAR"
+              failed=1
+            fi
+            exit "${'$'}failed"
+        """.trimIndent(),
+    )
+}
+
+fun consumableAar(name: String, usage: String) = configurations.create(name) {
+    isCanBeConsumed = true
+    isCanBeResolved = false
+    attributes {
+        attribute(Category.CATEGORY_ATTRIBUTE, objects.named(Category.LIBRARY))
+        attribute(Usage.USAGE_ATTRIBUTE, objects.named(usage))
+        attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named("aar"))
+        attribute(Bundling.BUNDLING_ATTRIBUTE, objects.named(Bundling.EXTERNAL))
+        attribute(TargetJvmEnvironment.TARGET_JVM_ENVIRONMENT_ATTRIBUTE, objects.named(TargetJvmEnvironment.ANDROID))
+        attribute(KotlinPlatformType.attribute, KotlinPlatformType.androidJvm)
+    }
+    outgoing.artifact(mwebdAar) {
+        builtBy(buildMwebdAar)
+        type = "aar"
+    }
+}
+
+consumableAar("androidApiElements", Usage.JAVA_API)
+consumableAar("androidRuntimeElements", Usage.JAVA_RUNTIME)
+
+tasks.assemble {
+    dependsOn(verifyElfAlignment)
+}
+
+tasks.check {
+    dependsOn(verifyElfAlignment)
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("release") {
+            artifact(mwebdAar) {
+                builtBy(buildMwebdAar)
+                extension = "aar"
+            }
+            artifactId = "native-android"
+            pom {
+                name.set("mwebd native Android runtime")
+                description.set("gomobile Android runtime for mwebd-kmp")
+            }
+        }
+    }
+}
+
+fun gitCommitSha(): String {
+    return try {
+        val process = ProcessBuilder("git", "rev-parse", "HEAD")
+            .directory(rootProject.projectDir)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().readText().trim()
+        if (process.waitFor() == 0 && output.isNotEmpty()) output else "unknown"
+    } catch (_: Exception) {
+        "unknown"
+    }
+}

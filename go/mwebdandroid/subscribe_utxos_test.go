@@ -2,6 +2,7 @@ package mwebdandroid
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 
@@ -37,18 +38,27 @@ func (l *recordingListener) OnComplete() {
 }
 
 // TestSubscribeUtxos_panicInStream_reportedNotCrashed verifies that a panic
-// inside the streaming goroutine (here a server whose utxoChan is nil — the
+// inside the streaming goroutine (here a bare server without ChainService — the
 // reported crash condition) is converted into OnError/OnComplete instead of
 // aborting the whole process. A daemon subscription must never be able to take
 // down the host app.
 func TestSubscribeUtxos_panicInStream_reportedNotCrashed(t *testing.T) {
-	d := &Daemon{server: mwebd.NewBareServer(chaincfg.MainNetParams)}
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &Daemon{
+		server:        mwebd.NewBareServer(chaincfg.MainNetParams),
+		state:         daemonRunning,
+		ctx:           ctx,
+		cancel:        cancel,
+		subscriptions: map[*UtxoSubscription]struct{}{},
+	}
 	listener := newRecordingListener()
 	scanSecret := make([]byte, 32)
 
-	if _, err := d.SubscribeUtxos(0, scanSecret, listener); err != nil {
+	subscription, err := d.SubscribeUtxos(0, scanSecret, listener)
+	if err != nil {
 		t.Fatalf("SubscribeUtxos returned error: %v", err)
 	}
+	defer subscription.Close()
 
 	select {
 	case <-listener.errs:
@@ -61,6 +71,35 @@ func TestSubscribeUtxos_panicInStream_reportedNotCrashed(t *testing.T) {
 	case <-listener.completed:
 	case <-time.After(time.Second):
 		t.Fatal("expected OnComplete after the stream goroutine ended")
+	}
+}
+
+func TestUtxoSubscriptionClose_waitsForCompletion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	d := &Daemon{
+		server:        mwebd.NewBareServer(chaincfg.MainNetParams),
+		state:         daemonRunning,
+		ctx:           ctx,
+		cancel:        cancel,
+		subscriptions: map[*UtxoSubscription]struct{}{},
+	}
+	listener := newRecordingListener()
+	subscription, err := d.SubscribeUtxos(0, make([]byte, 32), listener)
+	if err != nil {
+		t.Fatalf("SubscribeUtxos returned error: %v", err)
+	}
+
+	subscription.Close()
+
+	select {
+	case <-listener.completed:
+	default:
+		t.Fatal("Close returned before OnComplete")
+	}
+	select {
+	case <-subscription.done:
+	default:
+		t.Fatal("Close returned before the stream goroutine stopped")
 	}
 }
 

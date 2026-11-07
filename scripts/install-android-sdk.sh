@@ -18,7 +18,7 @@ fi
 yes | "${CMDLINE_TOOLS_DIR}/bin/sdkmanager" --sdk_root="${ANDROID_SDK_ROOT}" --licenses >/dev/null || true
 "${CMDLINE_TOOLS_DIR}/bin/sdkmanager" --sdk_root="${ANDROID_SDK_ROOT}" \
   "platform-tools" \
-  "platforms;android-24" \
+  "platforms;android-35" \
   "ndk;${NDK_VERSION}"
 
 echo "Android SDK installed at ${ANDROID_SDK_ROOT}"

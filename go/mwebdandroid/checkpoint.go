@@ -81,6 +81,12 @@ func bootstrapRestoreCheckpoint(dataDir, encodedCheckpoint string) error {
 	}, nil)
 }
 
+// BootstrapRestoreCheckpoint prepares a data directory for an optional restore
+// checkpoint before the daemon opens its database.
+func BootstrapRestoreCheckpoint(dataDir, encodedCheckpoint string) error {
+	return bootstrapRestoreCheckpoint(dataDir, encodedCheckpoint)
+}
+
 func shouldBootstrapRestoreCheckpoint(dataDir string, checkpointHeight uint32) (bool, error) {
 	headerFilesExist, err := headerfs.HeaderStoreFilesExist(dataDir)
 	if err != nil {

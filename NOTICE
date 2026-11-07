@@ -1,7 +1,13 @@
-mwebd-android packages github.com/ltcmweb/mwebd for Android.
+mwebd-kmp packages github.com/ltcmweb/mwebd for Android and Desktop JVM.
+
+Android uses an in-process gomobile runtime. Desktop JVM distributions use an
+authenticated native sidecar built from the same pinned Go sources.
 
 Upstream mwebd:
 https://github.com/ltcmweb/mwebd
 
 Pinned upstream version:
 github.com/ltcmweb/mwebd v0.1.19
+
+The source distribution also contains the pinned local neutrino fork used by
+mwebd. Its license is preserved at go/mwebdandroid/third_party/neutrino/LICENSE.

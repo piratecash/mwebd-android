@@ -1,6 +1,9 @@
 syntax = "proto3";
 
 option go_package = "github.com/ltcmweb/mwebd/proto";
+option java_package = "com.piratecash.mwebd.protocol";
+option java_outer_classname = "MwebdProtocol";
+option java_multiple_files = true;
 
 service Rpc {
     // Get the sync status of the daemon. The block headers are
@@ -105,9 +108,13 @@ message Utxo {
 
     // Fields 6-8 are left free to reduce collision risk with upstream Utxo additions.
     // Sentinel sent once after historical replay finishes.
-    // A positive value means all matching UTXOs at or below this
-    // leafset snapshot height have already been streamed.
+    // All matching UTXOs at or below this leafset snapshot height have
+    // already been streamed; zero is valid before the first snapshot.
     uint32 replay_complete_height = 9;
+
+    // Distinguishes replay completion at height zero from the legacy
+    // all-zero initialization marker.
+    bool replay_complete = 10;
 }
 
 message AddressRequest {

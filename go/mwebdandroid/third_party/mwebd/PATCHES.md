@@ -13,6 +13,9 @@ Local changes:
 - `server.go`: emits the replay-complete sentinel after historical UTXO replay
   and before the live stream loop.
 - `server_test.go`: covers sentinel emission.
+- `server.go`: adds `ServerArgs.DisableDebugLog`, which replaces the plaintext
+  `logs/debug.log` writer with a disabled logger.
+- `server_debug_log_test.go`: covers both logger modes.
 
 When upgrading the base dependency, reapply this patch set or replace it with an
 upstream/tagged fork that exposes the same replay-complete signal.

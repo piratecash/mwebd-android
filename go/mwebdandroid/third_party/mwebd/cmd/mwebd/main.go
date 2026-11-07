@@ -32,6 +32,9 @@ func main() {
 	if _, err = server.StartAddr(*bindAddr); err != nil {
 		log.Fatalln("Failed to listen:", err)
 	}
+	if err = server.Wait(); err != nil {
+		log.Fatalln("Server stopped with error:", err)
+	}
 }
 
 func waitForParent(server *mwebd.Server) {
@@ -45,5 +48,5 @@ func waitForParent(server *mwebd.Server) {
 			time.Sleep(time.Second)
 		}
 	}
-	server.Stop()
+	_ = server.Stop()
 }

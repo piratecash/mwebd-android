@@ -12,11 +12,27 @@ func TestUtxoStreamSend_replayCompleteSentinel_callsOnReplayComplete(t *testing.
 	listener := &recordingUtxoListener{}
 	stream := newTestUtxoStream(context.Background(), listener)
 
-	if err := stream.Send(&proto.Utxo{ReplayCompleteHeight: 123}); err != nil {
+	if err := stream.Send(&proto.Utxo{ReplayComplete: true, ReplayCompleteHeight: 123}); err != nil {
 		t.Fatalf("Send returned error: %v", err)
 	}
 
 	if len(listener.replayCompleteHeights) != 1 || listener.replayCompleteHeights[0] != 123 {
+		t.Fatalf("unexpected replay complete heights: %v", listener.replayCompleteHeights)
+	}
+	if len(listener.utxos) != 0 {
+		t.Fatalf("expected no regular UTXOs, got %d", len(listener.utxos))
+	}
+}
+
+func TestUtxoStreamSend_replayCompleteAtHeightZero_callsOnReplayComplete(t *testing.T) {
+	listener := &recordingUtxoListener{}
+	stream := newTestUtxoStream(context.Background(), listener)
+
+	if err := stream.Send(&proto.Utxo{ReplayComplete: true}); err != nil {
+		t.Fatalf("Send returned error: %v", err)
+	}
+
+	if len(listener.replayCompleteHeights) != 1 || listener.replayCompleteHeights[0] != 0 {
 		t.Fatalf("unexpected replay complete heights: %v", listener.replayCompleteHeights)
 	}
 	if len(listener.utxos) != 0 {
@@ -45,6 +61,7 @@ func TestUtxoStreamSend_partialReplayCompleteSentinel_dropsMalformedMessage(t *t
 	stream := newTestUtxoStream(context.Background(), listener)
 
 	if err := stream.Send(&proto.Utxo{
+		ReplayComplete:       true,
 		ReplayCompleteHeight: 123,
 		OutputId:             "not-a-sentinel",
 	}); err != nil {
@@ -65,7 +82,7 @@ func TestUtxoStreamSend_cancelledContext_returnsContextError(t *testing.T) {
 	listener := &recordingUtxoListener{}
 	stream := newTestUtxoStream(ctx, listener)
 
-	err := stream.Send(&proto.Utxo{ReplayCompleteHeight: 123})
+	err := stream.Send(&proto.Utxo{ReplayComplete: true, ReplayCompleteHeight: 123})
 
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context.Canceled, got %v", err)
