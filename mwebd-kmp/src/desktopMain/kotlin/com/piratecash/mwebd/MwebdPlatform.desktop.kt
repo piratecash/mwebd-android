@@ -375,6 +375,7 @@ private fun MwebdConfig.toSidecarConfig(): DaemonSidecarConfig {
         peerAddress = peerAddress.orEmpty(),
         proxyAddress = proxyAddress.orEmpty(),
         restoreCheckpoint = restoreCheckpoint.orEmpty(),
+        disableDebugLog = disableDebugLog,
     )
 }
 

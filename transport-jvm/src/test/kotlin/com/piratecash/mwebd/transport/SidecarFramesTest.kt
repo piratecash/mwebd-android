@@ -22,11 +22,24 @@ class SidecarFramesTest {
     }
 
     @Test
+    fun writeInit_disableDebugLog_endsFrameWithFlagByte() {
+        val bytes = listOf(false, true).map { disableDebugLog ->
+            ByteArrayOutputStream().also { output ->
+                SidecarFrames.writeInit(output, SidecarInit(mode = SidecarMode.Daemon, disableDebugLog = disableDebugLog))
+            }.toByteArray()
+        }
+
+        assertEquals(0, bytes[0].last().toInt())
+        assertEquals(1, bytes[1].last().toInt())
+        assertEquals(bytes[0].dropLast(1), bytes[1].dropLast(1))
+    }
+
+    @Test
     fun readReady_validFrame_decodesIdentity() {
         val output = ByteArrayOutputStream()
         DataOutputStream(output).apply {
             write("MWEBRDY1".encodeToByteArray())
-            writeInt(1)
+            writeInt(2)
             writeField("ltcmweb/mwebd v0.1.19, mwebd-kmp 1.0.0 (abc)")
             writeInt(1234)
         }

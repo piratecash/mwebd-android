@@ -209,6 +209,7 @@ private class AndroidMwebdDaemon(
     }
 
     private fun createNativeDaemon(): Daemon {
+        require(!config.disableDebugLog) { "disableDebugLog is not supported by the Android binding" }
         File(config.dataDir).mkdirs()
         val checkpoint = config.restoreCheckpoint
         return if (checkpoint.isNullOrEmpty()) {

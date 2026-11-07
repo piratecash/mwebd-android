@@ -25,6 +25,7 @@ func TestReadInit_validFrame_decodesEveryField(t *testing.T) {
 	if err := binary.Write(buffer, binary.BigEndian, int32(11)); err != nil {
 		t.Fatal(err)
 	}
+	buffer.WriteByte(1)
 
 	init, err := ReadInit(buffer)
 	if err != nil {
@@ -35,7 +36,7 @@ func TestReadInit_validFrame_decodesEveryField(t *testing.T) {
 		init.ProxyAddress != "proxy" || init.RestoreCheckpoint != "checkpoint" ||
 		!bytes.Equal(init.ScanSecret, []byte{1, 2}) ||
 		!bytes.Equal(init.SpendPublicKey, []byte{3, 4}) ||
-		init.FromIndex != 7 || init.ToIndex != 11 {
+		init.FromIndex != 7 || init.ToIndex != 11 || !init.DisableDebugLog {
 		t.Fatalf("unexpected decoded init: %+v", init)
 	}
 }

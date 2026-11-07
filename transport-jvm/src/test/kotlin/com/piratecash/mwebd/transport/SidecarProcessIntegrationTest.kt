@@ -69,6 +69,29 @@ class SidecarProcessIntegrationTest {
         }
     }
 
+    @Test
+    fun start_disableDebugLog_writesNoLogsDirectory() {
+        assertEquals(false, logsDirectoryExistsAfterRun(disableDebugLog = true))
+    }
+
+    @Test
+    fun start_defaultConfig_writesLogsDirectory() {
+        assertEquals(true, logsDirectoryExistsAfterRun(disableDebugLog = false))
+    }
+
+    private fun logsDirectoryExistsAfterRun(disableDebugLog: Boolean): Boolean {
+        val dataDirectory = Files.createTempDirectory("mwebd-sidecar-debug-log-")
+        try {
+            SidecarProcess.start(
+                DaemonSidecarConfig("regtest", dataDirectory.toString(), "", "", "", disableDebugLog),
+                timeoutMillis = 30_000,
+            ).close()
+            return Files.exists(dataDirectory.resolve("logs"))
+        } finally {
+            deleteRecursively(dataDirectory)
+        }
+    }
+
     private fun withSidecar(block: (SidecarProcess) -> Unit) {
         val dataDirectory = Files.createTempDirectory("mwebd-sidecar-test-")
         try {

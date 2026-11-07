@@ -79,6 +79,7 @@ func runDaemon(init *sidecar.Init) error {
 		ProxyAddr:          init.ProxyAddress,
 		UnaryInterceptors:  []grpc.UnaryServerInterceptor{unaryAuthenticator(init.Token)},
 		StreamInterceptors: []grpc.StreamServerInterceptor{streamAuthenticator(init.Token)},
+		DisableDebugLog:    init.DisableDebugLog,
 	})
 	if err != nil {
 		return fmt.Errorf("daemon initialization failed: %w", err)

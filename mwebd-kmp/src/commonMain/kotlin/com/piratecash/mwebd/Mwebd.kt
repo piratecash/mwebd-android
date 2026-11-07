@@ -37,6 +37,8 @@ data class MwebdConfig(
     val peerAddress: String? = null,
     val proxyAddress: String? = null,
     val restoreCheckpoint: String? = null,
+    /** Desktop only: the Android binding always writes `logs/debug.log`. */
+    val disableDebugLog: Boolean = false,
 ) {
     override fun toString(): String {
         return "MwebdConfig(" +
@@ -45,7 +47,8 @@ data class MwebdConfig(
             "accountKeys=$accountKeys, " +
             "peerAddress=$peerAddress, " +
             "proxyAddress=${proxyAddress?.let { "<redacted>" }}, " +
-            "restoreCheckpoint=$restoreCheckpoint)"
+            "restoreCheckpoint=$restoreCheckpoint, " +
+            "disableDebugLog=$disableDebugLog)"
     }
 }
 

@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	ProtocolVersion uint32 = 1
+	ProtocolVersion uint32 = 2
 	ModeDaemon      byte   = 0
 	ModeAddresses   byte   = 1
 	maxFieldSize           = 64 * 1024 * 1024
@@ -32,6 +32,7 @@ type Init struct {
 	SpendPublicKey    []byte
 	FromIndex         int32
 	ToIndex           int32
+	DisableDebugLog   bool
 }
 
 type Ready struct {
@@ -88,6 +89,9 @@ func ReadInit(reader io.Reader) (*Init, error) {
 		return nil, err
 	}
 	if err = binary.Read(reader, binary.BigEndian, &init.ToIndex); err != nil {
+		return nil, err
+	}
+	if err = binary.Read(reader, binary.BigEndian, &init.DisableDebugLog); err != nil {
 		return nil, err
 	}
 	return init, nil

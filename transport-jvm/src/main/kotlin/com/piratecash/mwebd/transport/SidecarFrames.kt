@@ -5,7 +5,7 @@ import java.io.DataOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 
-private const val PROTOCOL_VERSION = 1
+private const val PROTOCOL_VERSION = 2
 private const val MAX_FIELD_SIZE = 64 * 1024 * 1024
 private val INIT_MAGIC = "MWEBINI1".encodeToByteArray()
 private val READY_MAGIC = "MWEBRDY1".encodeToByteArray()
@@ -28,6 +28,7 @@ internal data class SidecarInit(
     val spendPublicKey: ByteArray = byteArrayOf(),
     val fromIndex: Int = 0,
     val toIndex: Int = 0,
+    val disableDebugLog: Boolean = false,
 )
 
 data class SidecarReady(
@@ -52,6 +53,7 @@ internal object SidecarFrames {
             writeField(init.spendPublicKey)
             writeInt(init.fromIndex)
             writeInt(init.toIndex)
+            writeBoolean(init.disableDebugLog)
             flush()
         }
     }

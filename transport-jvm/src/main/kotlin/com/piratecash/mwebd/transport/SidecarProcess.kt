@@ -20,6 +20,7 @@ data class DaemonSidecarConfig(
     val peerAddress: String,
     val proxyAddress: String,
     val restoreCheckpoint: String,
+    val disableDebugLog: Boolean = false,
 )
 
 class SidecarProcess private constructor(
@@ -80,6 +81,7 @@ class SidecarProcess private constructor(
                         peerAddress = config.peerAddress,
                         proxyAddress = config.proxyAddress,
                         restoreCheckpoint = config.restoreCheckpoint,
+                        disableDebugLog = config.disableDebugLog,
                     ),
                 )
                 val ready = readWithTimeout(timeoutMillis) { SidecarFrames.readReady(process.inputStream) }

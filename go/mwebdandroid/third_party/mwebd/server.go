@@ -63,6 +63,8 @@ type ServerArgs struct {
 	Chain, DataDir, PeerAddr, ProxyAddr string
 	UnaryInterceptors                   []grpc.UnaryServerInterceptor
 	StreamInterceptors                  []grpc.StreamServerInterceptor
+	// DisableDebugLog keeps txids and peer IPs out of the plaintext logs/debug.log.
+	DisableDebugLog bool
 }
 
 func NewBareServer(chainParams chaincfg.Params) *Server {
@@ -144,14 +146,7 @@ func NewServer2(args *ServerArgs) (s *Server, err error) {
 		}
 	}
 
-	log := btclog.NewBackend(&lumberjack.Logger{
-		Filename:   filepath.Join(args.DataDir, "logs", "debug.log"),
-		MaxSize:    10,
-		MaxBackups: 10,
-		Compress:   true,
-	}).Logger("")
-	log.SetLevel(btclog.LevelDebug)
-	neutrino.UseLogger(log)
+	neutrino.UseLogger(neutrinoLogger(args))
 
 	s.cs, err = neutrino.NewChainService(cfg)
 	if err != nil {
@@ -164,6 +159,20 @@ func NewServer2(args *ServerArgs) (s *Server, err error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+func neutrinoLogger(args *ServerArgs) btclog.Logger {
+	if args.DisableDebugLog {
+		return btclog.Disabled
+	}
+	log := btclog.NewBackend(&lumberjack.Logger{
+		Filename:   filepath.Join(args.DataDir, "logs", "debug.log"),
+		MaxSize:    10,
+		MaxBackups: 10,
+		Compress:   true,
+	}).Logger("")
+	log.SetLevel(btclog.LevelDebug)
+	return log
 }
 
 func (s *Server) Start(port int) (int, error) {
